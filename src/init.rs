@@ -1,0 +1,190 @@
+//! INIT — build the state from the point. NOT measured.
+//!
+//! `State::init(point)` does keygen once per benchmark point: picks the
+//! Poulpy preset the point names, then module, compiled bootstrapping
+//! context, secret, bootstrapping keys — from the point's `key_seed`.
+//! Every key stream is derived from `key_seed`, so the same point gives the
+//! same keys on any machine and any exact backend. The platform owns this
+//! file; a submission does not edit it. The case comes from `generate.rs`.
+//!
+//! Same calls as Poulpy 0.8.3's own preset driver
+//! (`poulpy_ckks::test_suite::presets::BootstrappingPresetRun`, the code behind
+//! https://www.poulpy.dev/benchmarks/), with seeds in place of constants.
+
+use sha2::{Digest, Sha256};
+
+use poulpy_ckks::api::{CKKSAllOpsTmpBytes, CKKSBootstrappingOps};
+use poulpy_ckks::layouts::{BootstrappingContext, BootstrappingKeysPrepared, BootstrappingPipeline, CKKSModuleAlloc};
+use poulpy_ckks::presets::bootstrapping::{all, BootstrappingPreset};
+use poulpy_ckks::{CKKSLayout, CKKSMeta, SetCKKSInfos, SlotsKind};
+
+use poulpy_core::layouts::{
+    GLWELayout, GLWESecretPrepared, GLWESecretPreparedFactory, GLWESecretSampling, ModuleCoreAlloc, Rank,
+};
+
+use poulpy_hal::api::{ScratchOwnedAlloc, ScratchOwnedBorrow};
+use poulpy_hal::layouts::{Backend, Module, ScratchOwned};
+use poulpy_hal::source::Source;
+
+use crate::backend::BE;
+
+pub type Ct = poulpy_ckks::layouts::CKKSCiphertextOwned<BE>;
+
+/// The specification: the circuit. Everything else — sizes, widths, key
+/// layout, hamming weights — comes with the preset the point selects.
+pub const PIPELINE: BootstrappingPipeline = BootstrappingPipeline::S2CFirst;
+
+/// A benchmark point of the specification, as the platform states it in
+/// `manifest.json`: the sizes, and the key-seed keygen is derived from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Point {
+    pub n: usize,
+    pub log_delta: usize,
+    pub output_k: usize,
+    pub key_seed: u64,
+}
+
+/// The Poulpy preset for a point: the one with this pipeline and these sizes.
+/// A point Poulpy ships no preset for is not a point of this specification.
+pub fn preset_for(point: &Point) -> Result<BootstrappingPreset, String> {
+    let presets = all().map_err(|e| format!("poulpy presets: {e}"))?;
+    presets
+        .into_iter()
+        .find(|p| {
+            p.plan().pipeline() == PIPELINE
+                && p.n() == point.n
+                && p.log_delta() == point.log_delta
+                && p.output_k() == point.output_k
+        })
+        .ok_or_else(|| {
+            format!(
+                "no {PIPELINE:?} preset for N={} log_delta={} output_k={} in poulpy-ckks {}",
+                point.n, point.log_delta, point.output_k, POULPY_VERSION
+            )
+        })
+}
+
+/// The Poulpy release the harness is written against (pinned in Cargo.toml).
+pub const POULPY_VERSION: &str = "0.8.3";
+
+/// Everything `run` needs, built once from the key-seed.
+pub struct State {
+    pub preset: BootstrappingPreset,
+    pub module: Module<BE>,
+    pub context: BootstrappingContext<BE, f64>,
+    pub keys: BootstrappingKeysPrepared<<BE as Backend>::OwnedBuf, BE>,
+    pub scratch: ScratchOwned<BE>,
+    /// Preallocated output; `run` writes into it (as Poulpy's driver does).
+    pub output: Ct,
+    /// The secret `generate` encrypts with. Derivable from the point's
+    /// `key_seed` by anyone; correctness is byte equality, so it needs no guarding.
+    pub(crate) sk: GLWESecretPrepared<<BE as Backend>::OwnedBuf, BE>,
+    pub(crate) input_layout: CKKSLayout,
+}
+
+impl State {
+    /// keygen from the point's key-seed. Once per benchmark point.
+    pub fn init(point: &Point) -> Self {
+        let preset = preset_for(point).unwrap_or_else(|e| panic!("{e}"));
+        let key_seed = point.key_seed;
+        let plan = preset.plan();
+        let n = preset.n();
+        let base2k = preset.base2k();
+        let input_layout = preset.input_layout();
+        let bootstrap_layout = preset.bootstrap_layout();
+        let keys_layout = *preset.keys_layout();
+        let module = Module::<BE>::new(n as u64);
+
+        // Scratch: sized for compile and the common ops, then grown to what the
+        // full bootstrap needs.
+        let scratch_size = {
+            let mut ct = module.ckks_ciphertext_alloc_from_glwe_infos(&bootstrap_layout);
+            ct.set_meta(bootstrap_layout.meta);
+            module.ckks_all_ops_with_atk_tmp_bytes(
+                &ct,
+                &keys_layout.tensor_key,
+                &keys_layout.automorphism_key,
+                &ckks_spec(
+                    n,
+                    base2k,
+                    plan.eval_mod().coeffs_meta.log_delta(),
+                    plan.eval_mod().coeffs_meta.log_budget(),
+                ),
+            )
+        };
+        let mut scratch = ScratchOwned::<BE>::alloc(scratch_size);
+        let context = BootstrappingContext::<BE, f64>::compile(&module, base2k.into(), plan, &mut scratch.borrow())
+            .expect("compile the preset's bootstrapping plan");
+        let boot_scratch = module.ckks_bootstrap_tmp_bytes(&bootstrap_layout, &input_layout, &context, &keys_layout);
+        if boot_scratch > scratch_size {
+            scratch = ScratchOwned::<BE>::alloc(boot_scratch);
+        }
+
+        // Dense application secret at the preset's Hamming weight.
+        let mut source_sk = Source::new(seed32(key_seed, "sk"));
+        let mut sk_raw = module.glwe_secret_alloc_from_infos(&bootstrap_layout.glwe_layout);
+        module.glwe_secret_fill_ternary_hw(&mut sk_raw, preset.dense_secret_hamming_weight(), &mut source_sk);
+        let mut sk = module.glwe_secret_prepared_alloc_from_infos(&bootstrap_layout.glwe_layout);
+        module.glwe_secret_prepare(&mut sk, &sk_raw);
+
+        // Bootstrapping keys: rotation, tensor, encapsulation.
+        let mut source_xs = Source::new(seed32(key_seed, "xs"));
+        let mut source_xa = Source::new(seed32(key_seed, "xa"));
+        let mut source_xe = Source::new(seed32(key_seed, "xe"));
+        let keys = context
+            .generate_keys(
+                &module,
+                &sk_raw,
+                &keys_layout,
+                &mut source_xs,
+                &mut source_xe,
+                &mut source_xa,
+                &mut scratch.borrow(),
+            )
+            .expect("generate the bootstrapping keys")
+            .prepare(&module, &mut scratch.borrow());
+
+        let output = module.ckks_ciphertext_alloc_from_glwe_infos(&bootstrap_layout);
+
+        State {
+            preset,
+            module,
+            context,
+            keys,
+            scratch,
+            output,
+            sk,
+            input_layout,
+        }
+    }
+}
+
+/// A 32-byte seed for a named randomness stream under an integer root. The
+/// streams a pipeline draws from (secret, ephemeral secret, key error, key
+/// mask; message, input mask, input error) are kept apart, all fixed by the
+/// platform's seeds.
+pub(crate) fn seed32(root: u64, stream: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"fherma/ckks-bootstrap/");
+    h.update(root.to_le_bytes());
+    h.update(b"/");
+    h.update(stream.as_bytes());
+    h.finalize().into()
+}
+
+/// A CKKS layout from widths (Poulpy's `test_suite::helpers::ckks_spec`).
+fn ckks_spec(n: usize, base2k: usize, log_delta: usize, log_budget: usize) -> CKKSLayout {
+    CKKSLayout {
+        glwe_layout: GLWELayout {
+            n: n.into(),
+            base2k: base2k.into(),
+            k: (log_delta + log_budget).into(),
+            rank: Rank(1),
+        },
+        meta: CKKSMeta {
+            log_sparsity: 0,
+            log_delta,
+            slots: SlotsKind::Complex,
+        },
+    }
+}

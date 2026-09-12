@@ -1,0 +1,7 @@
+// What a submission declares. The circuit (specification) and the sizes and
+// key-seed (benchmark point) are the platform's; the backend is a cargo feature
+// in Cargo.toml (ref | neon[-rayon] | avx[-rayon] | avx512[-rayon] | ifma[-rayon]).
+{
+  // Worker threads for a *-rayon backend. Single-thread backends ignore it.
+  "threads": 1
+}

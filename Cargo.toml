@@ -1,0 +1,54 @@
+[package]
+name = "ckks-bootstrap-reference"
+version = "0.0.0"
+edition = "2021"
+
+# The binary the runner starts: ./fherma-solution <point directory>
+[[bin]]
+name = "fherma-solution"
+path = "src/main.rs"
+
+# Reference implementation for the CKKS bootstrapping benchmark: Poulpy's
+# S2C-first pipeline at preset n16_d35_k720_p19_s2c, the configuration
+# published at https://www.poulpy.dev/benchmarks/. It is the wrapper: keygen
+# and the input ciphertext are derived from seeds and are not measured; only
+# the ckks_bootstrap call is timed. See README.md.
+#
+# Targets Poulpy 0.8.3, the release that ships the logN=16 bootstrapping
+# presets; 0.8.2 has none.
+
+[dependencies]
+poulpy-ckks = "=0.8.3"
+poulpy-core = "=0.8.3"
+poulpy-hal = "=0.8.3"
+poulpy-cpu-ref = { version = "=0.8.3", features = ["enable-ckks"] }
+sha2 = "0.10"
+libc = "0.2" # peak RSS via getrusage, for the report
+
+# The fast backends Poulpy publishes numbers for; one is chosen by a feature.
+poulpy-cpu-arm = { version = "=0.8.3", features = ["enable-neon", "enable-ckks"], optional = true }
+poulpy-cpu-avx = { version = "=0.8.3", features = ["enable-avx", "enable-ckks"], optional = true }
+poulpy-cpu-avx512 = { version = "=0.8.3", features = ["enable-avx512f", "enable-ckks"], optional = true }
+rayon = { version = "1", optional = true }
+
+[features]
+# Exactly one backend feature. `ref` (default) is the portable baseline. The
+# `*-rayon` backends run the bootstrap on `threads` worker threads; all others
+# are single-threaded. Build a non-default backend with
+#   cargo build --release --no-default-features --features <backend>
+# and, for the SIMD ones, RUSTFLAGS="-C target-cpu=native".
+default = ["ref"]
+ref = []
+# Internal: pulled in by every `*-rayon` backend.
+threaded = ["dep:rayon"]
+neon = ["dep:poulpy-cpu-arm"]
+neon-rayon = ["dep:poulpy-cpu-arm", "poulpy-cpu-arm/enable-rayon", "threaded"]
+avx = ["dep:poulpy-cpu-avx"]
+avx-rayon = ["dep:poulpy-cpu-avx", "poulpy-cpu-avx/enable-rayon", "threaded"]
+avx512 = ["dep:poulpy-cpu-avx512"]
+avx512-rayon = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-rayon", "threaded"]
+ifma = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-ifma"]
+ifma-rayon = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-ifma", "poulpy-cpu-avx512/enable-rayon", "threaded"]
+
+[profile.release]
+opt-level = 3
