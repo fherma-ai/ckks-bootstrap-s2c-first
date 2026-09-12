@@ -14,12 +14,15 @@
 use sha2::{Digest, Sha256};
 
 use poulpy_ckks::api::{CKKSAllOpsTmpBytes, CKKSBootstrappingOps};
-use poulpy_ckks::layouts::{BootstrappingContext, BootstrappingKeysPrepared, BootstrappingPipeline, CKKSModuleAlloc};
+use poulpy_ckks::layouts::{
+    BootstrappingContext, BootstrappingKeySet, BootstrappingKeysPrepared, BootstrappingPipeline, CKKSModuleAlloc,
+};
 use poulpy_ckks::presets::bootstrapping::{all, BootstrappingPreset};
 use poulpy_ckks::{CKKSLayout, CKKSMeta, SetCKKSInfos, SlotsKind};
 
 use poulpy_core::layouts::{
-    GLWELayout, GLWESecretPrepared, GLWESecretPreparedFactory, GLWESecretSampling, ModuleCoreAlloc, Rank,
+    GLWEAutomorphismKeyPreparedFactory, GLWELayout, GLWESecretPrepared, GLWESecretPreparedFactory, GLWESecretSampling,
+    GLWESwitchingKeyPreparedFactory, GLWETensorKeyPreparedFactory, ModuleCoreAlloc, Rank,
 };
 
 use poulpy_hal::api::{ScratchOwnedAlloc, ScratchOwnedBorrow};
@@ -127,11 +130,20 @@ impl State {
         let mut sk = module.glwe_secret_prepared_alloc_from_infos(&bootstrap_layout.glwe_layout);
         module.glwe_secret_prepare(&mut sk, &sk_raw);
 
-        // Bootstrapping keys: rotation, tensor, encapsulation.
+        // Bootstrapping keys: rotation, tensor, encapsulation. Generated as
+        // Poulpy's preset driver does, then prepared one key at a time, each
+        // unprepared key dropped as its prepared form is made. Poulpy's own
+        // `prepare` borrows the whole set and so holds both forms at once —
+        // at this point the keys are some 18 GB, and twice that is more than
+        // the machines this runs on have. The keys themselves are the same.
         let mut source_xs = Source::new(seed32(key_seed, "xs"));
         let mut source_xa = Source::new(seed32(key_seed, "xa"));
         let mut source_xe = Source::new(seed32(key_seed, "xe"));
-        let keys = context
+        let BootstrappingKeySet {
+            rotation_keys,
+            tensor_key,
+            encapsulation_keys,
+        } = context
             .generate_keys(
                 &module,
                 &sk_raw,
@@ -141,8 +153,36 @@ impl State {
                 &mut source_xa,
                 &mut scratch.borrow(),
             )
-            .expect("generate the bootstrapping keys")
-            .prepare(&module, &mut scratch.borrow());
+            .expect("generate the bootstrapping keys");
+        let keys = {
+            let mut rotation = std::collections::HashMap::with_capacity(rotation_keys.len());
+            for (galois, key) in rotation_keys {
+                let mut prepared = module.glwe_automorphism_key_prepared_alloc_from_infos(&key);
+                module.glwe_automorphism_key_prepare(&mut prepared, &key, &mut scratch.borrow());
+                rotation.insert(galois, prepared);
+                drop(key);
+            }
+            let tensor = {
+                let mut prepared = module.alloc_tensor_key_prepared_from_infos(&tensor_key);
+                module.prepare_tensor_key(&mut prepared, &tensor_key, &mut scratch.borrow());
+                drop(tensor_key);
+                prepared
+            };
+            let encapsulation = encapsulation_keys.map(|(dense_to_sparse, sparse_to_dense)| {
+                let mut d2s = module.glwe_switching_key_prepared_alloc_from_infos(&dense_to_sparse);
+                module.glwe_switching_key_prepare(&mut d2s, &dense_to_sparse, &mut scratch.borrow());
+                drop(dense_to_sparse);
+                let mut s2d = module.glwe_switching_key_prepared_alloc_from_infos(&sparse_to_dense);
+                module.glwe_switching_key_prepare(&mut s2d, &sparse_to_dense, &mut scratch.borrow());
+                drop(sparse_to_dense);
+                (d2s, s2d)
+            });
+            BootstrappingKeysPrepared {
+                rotation_keys: rotation,
+                tensor_key: tensor,
+                encapsulation_keys: encapsulation,
+            }
+        };
 
         let output = module.ckks_ciphertext_alloc_from_glwe_infos(&bootstrap_layout);
 

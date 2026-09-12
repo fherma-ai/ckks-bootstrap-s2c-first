@@ -126,10 +126,12 @@ same point and seed. On the platform the comparison is automatic.
 
 ## What it costs
 
-At this point, ref backend, one thread, Apple M-series: `init` about 2 min,
-the three warm-ups about 12 min, one `run` 2–4 min, peak memory 16–23 GB
-(26 GB with rayon × 4). Output per case 14 680 129 bytes. Plan for 32 GB and
-one process at a time. Poulpy's published numbers for the same preset (Ryzen 9
+At this point, ref backend, one thread, Apple M-series: `init` 110 s, the
+three warm-ups 670 s, one `run` 230 s. The keys alone are about 18 GB; the
+process holds 22–26 GB once they are prepared, and `init` prepares them one
+at a time so that it never holds two copies (Poulpy's own `prepare` does, and
+peaks near 40 GB). Output per case 14 680 129 bytes. Plan for 32 GB and one
+process at a time. Poulpy's published numbers for the same preset (Ryzen 9
 9950X): ref 39.4 s; AVX-512/IFMA + rayon × 16, 2.29 s.
 
 ## Submitting
