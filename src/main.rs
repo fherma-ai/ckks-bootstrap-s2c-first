@@ -4,9 +4,11 @@
 //!     ./fherma-solution <point directory>
 //!
 //! reads the directory a bundle prepared, answers every case in it, and writes
-//! what each stage cost. Only the call to `run::run` is the score; `init`
-//! (keygen) and `generate` (the case from its seed) are timed apart and
-//! reported beside it.
+//! what each stage cost. Every stage is timed — `init` (keygen), `generate`
+//! (the case from its seed), the warm-up, `run`, `digest` (serialising the
+//! output), writing it, `check` (decrypting it for its precision) — and only
+//! the call to `run::run` is the score; the rest is reported beside it, so a
+//! reader sees the whole cost and a challenge can choose what it counts.
 //!
 //! The point directory:
 //!
@@ -14,7 +16,8 @@
 //!     config.jsonc             optional overlay of the solution's own (threads)
 //!     cases/000017/case_seed.bin   one u64, little-endian — the whole input
 //!     out/000017/ct.bin        the output ciphertext, canonical bytes (written here)
-//!     out/results.json         init_s, one row per case, max_rss_bytes (written here)
+//!     out/results.json         init_s, warmup_s, one row per case with every stage's
+//!                              seconds and the precision metrics, max_rss_bytes (written here)
 //!
 //! Correctness is the platform's: sha256(out/NNNNNN/ct.bin) against the
 //! expected digest the reference produced for the same point and seed. The
@@ -26,6 +29,7 @@
 //! binary can stand in for the bundle locally. Case i holds seeds[i].
 
 mod backend;
+mod check;
 mod digest;
 mod generate;
 mod init;
@@ -84,7 +88,8 @@ fn solve(root: &Path) -> Anyhow<()> {
         point.n, point.log_delta, point.output_k, point.key_seed, preset.name(), init::POULPY_VERSION, backend::NAME
     );
     let mut rows: Vec<String> = Vec::new();
-    report(&out_root, &head, init_s, &rows);
+    let mut warmup_s = 0.0f64;
+    report(&out_root, &head, init_s, warmup_s, &rows);
 
     let mut warmed = false;
     for i in 0..total {
@@ -95,50 +100,84 @@ fn solve(root: &Path) -> Anyhow<()> {
             Ok(seed) => seed,
             Err(failure) => {
                 rows.push(crashed_row(i, &format!("reading the case: {failure}")));
-                report(&out_root, &head, init_s, &rows);
+                report(&out_root, &head, init_s, warmup_s, &rows);
                 continue;
             }
         };
 
         // GENERATE: the case from its seed. Timed apart.
         let mark = Instant::now();
-        let input = generate::generate(&mut state, case_seed);
+        let case = generate::generate(&mut state, case_seed);
         let generate_s = mark.elapsed().as_secs_f64();
 
+        // WARM-UP: discarded runs before the first timed one. Timed as a whole.
         if !warmed {
+            let mark = Instant::now();
             for _ in 0..WARMUP {
-                run::run(&mut state, &input);
+                run::run(&mut state, &case.input);
             }
+            warmup_s = mark.elapsed().as_secs_f64();
             warmed = true;
         }
 
-        // Monotonic, and around the call and nothing else.
+        // RUN: monotonic, and around the call and nothing else. The score.
         let started = Instant::now();
-        run::run(&mut state, &input);
+        run::run(&mut state, &case.input);
         let seconds = started.elapsed().as_secs_f64();
 
+        // DIGEST: the output as canonical bytes, and its hash.
+        let mark = Instant::now();
         let bytes = digest::bytes(&state.output);
+        let sha = digest::sha256(&bytes);
+        let digest_s = mark.elapsed().as_secs_f64();
+
+        // WRITE: the bytes to out/, for the bundle to hash the same way.
+        let mark = Instant::now();
         if let Err(failure) = fs::create_dir_all(&answer_dir).and_then(|_| fs::write(answer_dir.join("ct.bin"), &bytes))
         {
             rows.push(crashed_row(i, &format!("writing the answer: {failure}")));
-            report(&out_root, &head, init_s, &rows);
+            report(&out_root, &head, init_s, warmup_s, &rows);
             continue;
         }
+        let write_s = mark.elapsed().as_secs_f64();
+
+        // CHECK: decrypt and measure against the message. A metric, not the score.
+        let mark = Instant::now();
+        let precision = check::precision(&mut state, &case.re, &case.im);
+        let check_s = mark.elapsed().as_secs_f64();
 
         rows.push(format!(
-            "{{\"i\":{i},\"seconds\":{seconds:.9},\"status\":\"ok\",\"case_seed\":{case_seed},\"generate_s\":{generate_s:.9},\"digest\":\"{}\"}}",
-            digest::sha256(&bytes)
+            concat!(
+                "{{\"i\":{i},\"seconds\":{seconds:.9},\"status\":\"ok\",\"case_seed\":{case_seed},",
+                "\"generate_s\":{generate_s:.9},\"digest_s\":{digest_s:.9},\"write_s\":{write_s:.9},\"check_s\":{check_s:.9},",
+                "\"digest\":\"{sha}\",",
+                "\"metrics\":{{\"precision_bits\":{pmin:.3},\"precision_bits_avg\":{pavg:.3},",
+                "\"precision_bits_re\":{pre:.3},\"precision_bits_im\":{pim:.3},\"max_abs_err\":{err:.3e}}}}}"
+            ),
+            i = i,
+            seconds = seconds,
+            case_seed = case_seed,
+            generate_s = generate_s,
+            digest_s = digest_s,
+            write_s = write_s,
+            check_s = check_s,
+            sha = sha,
+            pmin = precision.re_min_bits.min(precision.im_min_bits),
+            pavg = (precision.re_avg_bits + precision.im_avg_bits) / 2.0,
+            pre = precision.re_min_bits,
+            pim = precision.im_min_bits,
+            err = precision.max_abs_err,
         ));
-        report(&out_root, &head, init_s, &rows);
+        report(&out_root, &head, init_s, warmup_s, &rows);
     }
     Ok(())
 }
 
 /// Written after every case, not at the end: a process killed on its timeout
 /// has still done the cases before it.
-fn report(out: &Path, head: &str, init_s: f64, rows: &[String]) {
+fn report(out: &Path, head: &str, init_s: f64, warmup_s: f64, rows: &[String]) {
     let body = format!(
-        "{{{head},\"init_s\":{init_s:.9},\"max_rss_bytes\":{},\"cases\":[{}]}}",
+        "{{{head},\"init_s\":{init_s:.9},\"warmup_s\":{warmup_s:.9},\"max_rss_bytes\":{},\"cases\":[{}]}}",
         max_rss_bytes(),
         rows.join(",")
     );

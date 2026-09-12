@@ -14,9 +14,17 @@ use poulpy_hal::source::Source;
 
 use crate::init::{seed32, Ct, State};
 
+/// One test case: the input ciphertext, and the message it encrypts — kept
+/// beside it so the output can be measured against it (`check`).
+pub struct Case {
+    pub input: Ct,
+    pub re: Vec<f64>,
+    pub im: Vec<f64>,
+}
+
 /// One test case from its seed: the message, encrypted at the preset's input
 /// layout. Message, encryption mask and error all come from the seed.
-pub fn generate(state: &mut State, seed: u64) -> Ct {
+pub fn generate(state: &mut State, seed: u64) -> Case {
     let (re, im) = sample_unit_disc(seed, state.preset.n() / 2);
 
     let mut pt = state
@@ -45,7 +53,7 @@ pub fn generate(state: &mut State, seed: u64) -> Ct {
             &mut state.scratch.borrow(),
         )
         .expect("encrypt the case input");
-    ct
+    Case { input: ct, re, im }
 }
 
 /// `m` complex values uniform on the unit disc, from the case-seed: SplitMix64
