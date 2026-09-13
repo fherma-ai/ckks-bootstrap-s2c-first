@@ -30,6 +30,7 @@ use poulpy_hal::layouts::{Backend, Module, ScratchOwned};
 use poulpy_hal::source::Source;
 
 use crate::backend::BE;
+use crate::fherma::Point;
 
 pub type Ct = poulpy_ckks::layouts::CKKSCiphertextOwned<BE>;
 
@@ -37,32 +38,25 @@ pub type Ct = poulpy_ckks::layouts::CKKSCiphertextOwned<BE>;
 /// layout, hamming weights — comes with the preset the point selects.
 pub const PIPELINE: BootstrappingPipeline = BootstrappingPipeline::S2CFirst;
 
-/// A benchmark point of the specification, as the platform states it in
-/// `manifest.json`: the sizes, and the key-seed keygen is derived from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Point {
-    pub n: usize,
-    pub log_delta: usize,
-    pub output_k: usize,
-    pub key_seed: u64,
-}
-
 /// The Poulpy preset for a point: the one with this pipeline and these sizes.
 /// A point Poulpy ships no preset for is not a point of this specification.
+///
+/// The point is the signature's (`fherma::Point`, generated): `N`, `log_delta`,
+/// `output_k` and `key_seed`, as the platform writes them in `manifest.json`.
 pub fn preset_for(point: &Point) -> Result<BootstrappingPreset, String> {
     let presets = all().map_err(|e| format!("poulpy presets: {e}"))?;
     presets
         .into_iter()
         .find(|p| {
             p.plan().pipeline() == PIPELINE
-                && p.n() == point.n
-                && p.log_delta() == point.log_delta
-                && p.output_k() == point.output_k
+                && p.n() == point.N as usize
+                && p.log_delta() == point.log_delta as usize
+                && p.output_k() == point.output_k as usize
         })
         .ok_or_else(|| {
             format!(
                 "no {PIPELINE:?} preset for N={} log_delta={} output_k={} in poulpy-ckks {}",
-                point.n, point.log_delta, point.output_k, POULPY_VERSION
+                point.N, point.log_delta, point.output_k, POULPY_VERSION
             )
         })
 }

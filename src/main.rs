@@ -31,6 +31,7 @@
 mod backend;
 mod check;
 mod digest;
+mod fherma;
 mod generate;
 mod init;
 mod run;
@@ -39,7 +40,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use init::Point;
+use fherma::{Inputs, Point};
 
 type Anyhow<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -85,7 +86,7 @@ fn solve(root: &Path) -> Anyhow<()> {
 
     let head = format!(
         "\"point\":{{\"N\":{},\"log_delta\":{},\"output_k\":{},\"key_seed\":{}}},\"preset\":\"{}\",\"poulpy\":\"{}\",\"backend\":\"{}\",\"threads\":{threads},\"warmup\":{WARMUP}",
-        point.n, point.log_delta, point.output_k, point.key_seed, preset.name(), init::POULPY_VERSION, backend::NAME
+        point.N, point.log_delta, point.output_k, point.key_seed, preset.name(), init::POULPY_VERSION, backend::NAME
     );
     let mut rows: Vec<String> = Vec::new();
     let mut warmup_s = 0.0f64;
@@ -96,18 +97,19 @@ fn solve(root: &Path) -> Anyhow<()> {
         let case_dir = root.join("cases").join(format!("{i:06}"));
         let answer_dir = out_root.join(format!("{i:06}"));
 
-        let case_seed = match read_u64(&case_dir, "case_seed") {
-            Ok(seed) => seed,
+        let input = match inputs_of(&case_dir) {
+            Ok(input) => input,
             Err(failure) => {
                 rows.push(crashed_row(i, &format!("reading the case: {failure}")));
                 report(&out_root, &head, init_s, warmup_s, &rows);
                 continue;
             }
         };
+        let case_seed = input.case_seed;
 
-        // GENERATE: the case from its seed. Timed apart.
+        // GENERATE: the case from its input. Timed apart.
         let mark = Instant::now();
-        let case = generate::generate(&mut state, case_seed);
+        let case = generate::generate(&mut state, &input);
         let generate_s = mark.elapsed().as_secs_f64();
 
         // WARM-UP: discarded runs before the first timed one. Timed as a whole.
@@ -228,14 +230,21 @@ fn number(text: &str, key: &str) -> Anyhow<f64> {
     Ok(rest[..end].parse()?)
 }
 
-/// The point as `manifest.json` (or `--point`) states it.
+/// The point as `manifest.json` (or `--point`) states it: the signature's
+/// `Point`, one field per parameter.
 fn point_of(text: &str) -> Anyhow<Point> {
     Ok(Point {
-        n: number(text, "N")? as usize,
-        log_delta: number(text, "log_delta")? as usize,
-        output_k: number(text, "output_k")? as usize,
+        N: number(text, "N")? as u32,
+        log_delta: number(text, "log_delta")? as u32,
+        output_k: number(text, "output_k")? as u32,
         key_seed: number(text, "key_seed")? as u64,
     })
+}
+
+/// The case as the bundle wrote it: the signature's `Inputs`, one file per
+/// argument, little-endian.
+fn inputs_of(dir: &Path) -> Anyhow<Inputs> {
+    Ok(Inputs { case_seed: read_u64(dir, "case_seed")? })
 }
 
 fn read_u64(dir: &Path, name: &str) -> Anyhow<u64> {
@@ -294,7 +303,7 @@ fn make(args: &[String]) -> Anyhow<()> {
         root.join("manifest.json"),
         format!(
             "{{\"N\":{},\"log_delta\":{},\"output_k\":{},\"key_seed\":{},\"cases\":{}}}\n",
-            point.n,
+            point.N,
             point.log_delta,
             point.output_k,
             point.key_seed,

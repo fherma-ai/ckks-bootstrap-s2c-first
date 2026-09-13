@@ -18,8 +18,9 @@ replaces it competes on the algorithm and must produce the same bytes.
 | `Cargo.toml` | **you** | the backend, as one cargo feature under `[features] default` |
 | `config.jsonc` | **you** | `threads`, for a `*-rayon` backend |
 | `rust-toolchain.toml` | you | `nightly-2026-05-14`; Poulpy needs nightly |
-| `src/init.rs` | platform | `State::init(point)`: the preset for the point, the module, the compiled bootstrapping context, secret and keys from `key_seed` |
-| `src/generate.rs` | platform | `generate(state, seed)`: the case from its seed — message, encryption mask, error |
+| `src/fherma.rs` | platform, generated | the types, from the specification's signature: `Point {N, log_delta, output_k, key_seed}`, `Inputs {case_seed}`, `Outputs {ct}` — the harness carries no copy of its own |
+| `src/init.rs` | platform | `State::init(&Point)`: the preset for the point, the module, the compiled bootstrapping context, secret and keys from `key_seed` |
+| `src/generate.rs` | platform | `generate(state, &Inputs)`: the case from its seed — message, encryption mask, error |
 | `src/main.rs` | platform | the loop: point directory in, `out/` and `results.json` out, the clock around `run` |
 | `src/digest.rs` | platform | the output ciphertext as canonical bytes, and its sha256 |
 | `src/check.rs` | platform | decrypts the output and measures its precision against the message |

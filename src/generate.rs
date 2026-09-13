@@ -12,6 +12,7 @@ use poulpy_core::EncryptionLayout;
 use poulpy_hal::api::ScratchOwnedBorrow;
 use poulpy_hal::source::Source;
 
+use crate::fherma::Inputs;
 use crate::init::{seed32, Ct, State};
 
 /// One test case: the input ciphertext, and the message it encrypts — kept
@@ -22,9 +23,11 @@ pub struct Case {
     pub im: Vec<f64>,
 }
 
-/// One test case from its seed: the message, encrypted at the preset's input
-/// layout. Message, encryption mask and error all come from the seed.
-pub fn generate(state: &mut State, seed: u64) -> Case {
+/// One test case from its input — the signature's `Inputs`, one seed: the
+/// message, encrypted at the preset's input layout. Message, encryption mask
+/// and error all come from the seed.
+pub fn generate(state: &mut State, input: &Inputs) -> Case {
+    let seed = input.case_seed;
     let (re, im) = sample_unit_disc(seed, state.preset.n() / 2);
 
     let mut pt = state
