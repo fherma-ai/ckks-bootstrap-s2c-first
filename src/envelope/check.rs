@@ -7,7 +7,7 @@
 //! (`test_suite::presets::BootstrappingPresetRun::precision`): decrypt the
 //! output at a small budget above `log_delta`, decode to `(re, im)`, and take
 //! `-log2` of the absolute error — the worst slot and the average. The
-//! platform owns this file; it has the secret because `init` does.
+//! specification's file; it has the secret because `setup` does.
 
 use poulpy_ckks::api::{CKKSDecryptOps, CKKSEncodingHostOps};
 use poulpy_ckks::layouts::CKKSModuleAlloc;
@@ -15,7 +15,7 @@ use poulpy_ckks::{CKKSInfos, CKKSMeta, SetCKKSInfos, SlotsKind};
 use poulpy_core::layouts::LWEInfos;
 use poulpy_hal::api::ScratchOwnedBorrow;
 
-use crate::init::State;
+use super::keys::{Context, Ct};
 
 /// Plaintext budget bits above `log_delta` the output is decrypted at, as in
 /// Poulpy's driver.
@@ -32,10 +32,9 @@ pub struct Precision {
     pub max_abs_err: f64,
 }
 
-/// Decrypts `state.output` and measures it against the message the case was
+/// Decrypts the output and measures it against the message the case was
 /// made from.
-pub fn precision(state: &mut State, want_re: &[f64], want_im: &[f64]) -> Precision {
-    let output = &state.output;
+pub fn precision(state: &Context, output: &Ct, want_re: &[f64], want_im: &[f64]) -> Precision {
     let log_delta = output.log_delta();
     let log_budget = output
         .log_budget()
@@ -50,16 +49,17 @@ pub fn precision(state: &mut State, want_re: &[f64], want_im: &[f64]) -> Precisi
         log_delta,
         slots: SlotsKind::Complex,
     });
+    let mut arena = state.scratch.borrow_mut();
     state
         .module
-        .ckks_decrypt(&mut pt, output, &state.sk, &mut state.scratch.borrow())
+        .ckks_decrypt(&mut pt, output, &state.sk, &mut arena.borrow())
         .expect("decrypt the output for the precision check");
 
     let m = want_re.len();
     let (mut got_re, mut got_im) = (vec![0.0f64; m], vec![0.0f64; m]);
     state
         .module
-        .ckks_decode_reim_into(&pt, &mut got_re, &mut got_im, &mut state.scratch.borrow())
+        .ckks_decode_reim_into(&pt, &mut got_re, &mut got_im, &mut arena.borrow())
         .expect("decode the output for the precision check");
 
     let re = stats(&got_re, want_re, log_delta);

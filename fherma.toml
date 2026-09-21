@@ -1,0 +1,35 @@
+kind = "solution"
+spec = "ckks-bootstrapping/s2c@1.0.0"
+
+# The harness of the specification lives here, in its reference implementation.
+# The platform snapshots this table and the pinned files at the commit the
+# specification points at, and lays them over every submission's clone before
+# the build; `fherma implementation init ckks-bootstrapping/s2c@1.0.0` scaffolds
+# the same files, the authored ones as a starting point. `src/main.rs` and
+# `src/fherma.rs` are generated from the signature (`fherma-lang emit
+# --solution --envelope`) and pinned; the copies kept here are for `cargo
+# build` in a plain clone, and must equal what the signature generates.
+[harness]
+lang  = "rust"
+build = "cargo build --release"
+run   = "./target/release/fherma-solution"
+# The envelope: setup / generate / serialize / check, and the backend choice.
+pinned = [
+  "src/envelope/mod.rs",
+  "src/envelope/keys.rs",
+  "src/envelope/case.rs",
+  "src/envelope/bytes.rs",
+  "src/envelope/check.rs",
+  "src/envelope/backend.rs",
+]
+# The author's: the three functions, the build, the config.
+authored = [
+  "src/init.rs",
+  "src/run.rs",
+  "src/free.rs",
+  "Cargo.toml",
+  "config.jsonc",
+  "rust-toolchain.toml",
+  ".gitignore",
+  "README.md",
+]

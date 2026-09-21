@@ -32,12 +32,14 @@ poulpy-cpu-avx512 = { version = "=0.8.3", features = ["enable-avx512f", "enable-
 rayon = { version = "1", optional = true }
 
 [features]
-# Exactly one backend feature. `ref` (default) is the portable baseline. The
-# `*-rayon` backends run the bootstrap on `threads` worker threads; all others
-# are single-threaded. Build a non-default backend with
+# Exactly one backend feature. The reference is the fastest one Poulpy has,
+# `ifma-rayon` (AVX-512 IFMA on every core), which is what the platform's
+# machines run; `ref` is the portable baseline. The `*-rayon` backends run
+# the bootstrap on `threads` worker threads; all others are single-threaded.
+# Build another backend with
 #   cargo build --release --no-default-features --features <backend>
 # and, for the SIMD ones, RUSTFLAGS="-C target-cpu=native".
-default = ["ref"]
+default = ["ifma-rayon"]
 ref = []
 # Internal: pulled in by every `*-rayon` backend.
 threaded = ["dep:rayon"]

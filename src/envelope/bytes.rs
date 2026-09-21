@@ -1,24 +1,22 @@
-//! The output digest: what a submission must reproduce byte-for-byte.
+//! The canonical bytes of a ciphertext: what a submission must reproduce.
 //!
-//! Correctness is `digest(submission output) == digest(reference output)`. The
-//! digest is sha256 over a canonical serialization of the ciphertext — the
-//! layout header and exactly the limbs that carry the ciphertext's `k` bits,
-//! column by column, little-endian i64 — so it does not depend on how big the
-//! buffer was allocated or what an earlier computation left beyond `k`.
-//! Poulpy's exact NTT backends produce the same limbs for the same seeds, so
-//! the reference's digest is the expected answer for all of them.
-
-use sha2::{Digest, Sha256};
+//! Correctness is `digest(submission output) == digest(reference output)`, and
+//! the digest is over these bytes — the layout header and exactly the limbs
+//! that carry the ciphertext's `k` bits, column by column, little-endian i64 —
+//! so it does not depend on how big the buffer was allocated or what an
+//! earlier computation left beyond `k`. Poulpy's exact NTT backends produce
+//! the same limbs for the same seeds, so the reference's digest is the
+//! expected answer for all of them. The digest itself is the loop's.
 
 use poulpy_ckks::CKKSInfos;
 use poulpy_core::layouts::{GLWEInfos, LWEInfos};
 use poulpy_hal::layouts::ZnxView;
 
-use crate::init::Ct;
+use super::keys::Ct;
 
 const MAGIC: &[u8] = b"fherma/ckks-ct/v1";
 
-/// The bytes of `ct` the digest is over — what `out/NNNNNN/ct.bin` holds.
+/// The bytes of `ct` the digest is over — what `out/NNNNNN/<result>.bin` holds.
 pub fn bytes(ct: &Ct) -> Vec<u8> {
     let n = ct.n().as_usize();
     let cols = ct.rank().as_usize() + 1;
@@ -51,19 +49,9 @@ pub fn bytes(ct: &Ct) -> Vec<u8> {
     out
 }
 
-/// Hex sha256 of what [`bytes`] returned — the same the bundle computes over
-/// the file on disk.
-pub fn sha256(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
-}
-
 fn slots_tag(ct: &Ct) -> u64 {
     match ct.slots() {
         poulpy_ckks::SlotsKind::Complex => 0,
         poulpy_ckks::SlotsKind::Real => 1,
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

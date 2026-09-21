@@ -2,7 +2,8 @@
 //!
 //! The bundle's `generate`, inside the solution because it needs the secret:
 //! the message and its encryption mask and error are all derived from the
-//! case's seed, so a case is its seed. The platform owns this file.
+//! case's seed, so a case is its seed. The specification's file, laid over
+//! every submission.
 
 use poulpy_ckks::api::{CKKSEncodingHostOps, CKKSEncryptOps};
 use poulpy_ckks::layouts::CKKSModuleAlloc;
@@ -13,12 +14,13 @@ use poulpy_hal::api::ScratchOwnedBorrow;
 use poulpy_hal::source::Source;
 
 use crate::fherma::Inputs;
-use crate::init::{seed32, Ct, State};
+
+use super::keys::{seed32, Context, Ct};
 
 /// One test case: the input ciphertext, and the message it encrypts — kept
 /// beside it so the output can be measured against it (`check`).
 pub struct Case {
-    pub input: Ct,
+    pub ct: Ct,
     pub re: Vec<f64>,
     pub im: Vec<f64>,
 }
@@ -26,7 +28,7 @@ pub struct Case {
 /// One test case from its input — the signature's `Inputs`, one seed: the
 /// message, encrypted at the preset's input layout. Message, encryption mask
 /// and error all come from the seed.
-pub fn generate(state: &mut State, input: &Inputs) -> Case {
+pub fn generate(state: &Context, input: &Inputs) -> Case {
     let seed = input.case_seed;
     let (re, im) = sample_unit_disc(seed, state.preset.n() / 2);
 
@@ -34,9 +36,10 @@ pub fn generate(state: &mut State, input: &Inputs) -> Case {
         .module
         .ckks_pt_vec_alloc(state.preset.base2k().into(), state.input_layout.k());
     pt.set_meta(state.input_layout.meta());
+    let mut arena = state.scratch.borrow_mut();
     state
         .module
-        .ckks_encode_reim_into(&mut pt, &re, &im, &mut state.scratch.borrow())
+        .ckks_encode_reim_into(&mut pt, &re, &im, &mut arena.borrow())
         .expect("encode the case message");
 
     let enc = EncryptionLayout::new_from_default_sigma(state.input_layout.glwe_layout)
@@ -53,10 +56,10 @@ pub fn generate(state: &mut State, input: &Inputs) -> Case {
             &enc,
             &mut xe,
             &mut xa,
-            &mut state.scratch.borrow(),
+            &mut arena.borrow(),
         )
         .expect("encrypt the case input");
-    Case { input: ct, re, im }
+    Case { ct, re, im }
 }
 
 /// `m` complex values uniform on the unit disc, from the case-seed: SplitMix64
