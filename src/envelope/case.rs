@@ -9,7 +9,6 @@ use poulpy_ckks::api::{CKKSEncodingHostOps, CKKSEncryptOps};
 use poulpy_ckks::layouts::CKKSModuleAlloc;
 use poulpy_ckks::{CKKSInfos, SetCKKSInfos};
 use poulpy_core::layouts::LWEInfos;
-use poulpy_core::EncryptionLayout;
 use poulpy_hal::api::ScratchOwnedBorrow;
 use poulpy_hal::source::Source;
 
@@ -42,8 +41,8 @@ pub fn generate(state: &Context, input: &Inputs) -> Case {
         .ckks_encode_reim_into(&mut pt, &re, &im, &mut arena.borrow())
         .expect("encode the case message");
 
-    let enc = EncryptionLayout::new_from_default_sigma(state.input_layout.glwe_layout)
-        .expect("encryption layout for the input");
+    // 0.9.0 samples the mask and the Gaussian noise at the ciphertext's own
+    // width, so the encryption layout is no longer the caller's to pass.
     let mut ct = state.module.ckks_ciphertext_alloc_from_glwe_infos(&state.input_layout);
     let mut xa = Source::new(seed32(seed, "input-xa"));
     let mut xe = Source::new(seed32(seed, "input-xe"));
@@ -53,7 +52,6 @@ pub fn generate(state: &Context, input: &Inputs) -> Case {
             &mut ct,
             &pt,
             &state.sk,
-            &enc,
             &mut xe,
             &mut xa,
             &mut arena.borrow(),

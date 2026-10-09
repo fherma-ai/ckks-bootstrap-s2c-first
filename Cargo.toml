@@ -18,17 +18,17 @@ path = "src/main.rs"
 # presets; 0.8.2 has none.
 
 [dependencies]
-poulpy-ckks = "=0.8.3"
-poulpy-core = "=0.8.3"
-poulpy-hal = "=0.8.3"
-poulpy-cpu-ref = { version = "=0.8.3", features = ["enable-ckks"] }
+poulpy-ckks = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
+poulpy-core = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
+poulpy-hal = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
+poulpy-cpu-portable = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-ckks"] }
 sha2 = "0.10"
 libc = "0.2" # peak RSS via getrusage, for the report
 
 # The fast backends Poulpy publishes numbers for; one is chosen by a feature.
-poulpy-cpu-arm = { version = "=0.8.3", features = ["enable-neon", "enable-ckks"], optional = true }
-poulpy-cpu-avx = { version = "=0.8.3", features = ["enable-avx", "enable-ckks"], optional = true }
-poulpy-cpu-avx512 = { version = "=0.8.3", features = ["enable-avx512f", "enable-ckks"], optional = true }
+poulpy-cpu-arm = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-neon", "enable-ckks"], optional = true }
+poulpy-cpu-avx = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-avx", "enable-ckks"], optional = true }
+poulpy-cpu-avx512 = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-avx512f", "enable-ckks"], optional = true }
 rayon = { version = "1", optional = true }
 
 [features]

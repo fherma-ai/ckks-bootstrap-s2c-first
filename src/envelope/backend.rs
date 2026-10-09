@@ -65,11 +65,11 @@ pub const NAME: &str = "ntt3x42_ifma_rayon";
 compile_error!("select one backend feature: ref (default), neon[-rayon], avx[-rayon], avx512[-rayon], ifma[-rayon]");
 
 // Every backend offered must be exact: an approximate FFT64 backend would run
-// the preset at another radix and could not reproduce the bytes.
-const _: () = assert!(
-    <BE as poulpy_hal::layouts::Backend>::DFT_IS_EXACT,
-    "the reference needs an exact (NTT) backend"
-);
+// the preset at another radix and could not reproduce the bytes. 0.8.3 let the
+// backend say so — `Backend::DFT_IS_EXACT` — and 0.9.0 removed the flag, which
+// its changelog calls a workaround for an FFT64 bug rather than a statement
+// about the transform. The guarantee is now the feature list above: every one
+// of them selects an NTT backend, and selecting none is a compile error.
 
 /// Whether this backend spreads the bootstrap over a rayon pool.
 pub const THREADED: bool = cfg!(feature = "threaded");
