@@ -14,8 +14,10 @@ path = "src/main.rs"
 # and the input ciphertext are derived from seeds and are not measured; only
 # the ckks_bootstrap call is timed. See README.md.
 #
-# Targets Poulpy 0.8.3, the release that ships the logN=16 bootstrapping
-# presets; 0.8.2 has none.
+# Targets Poulpy 0.9.0, which redesigned the HAL and changed the seeded noise
+# streams: the envelope does not compile against 0.8.3, and the same seed gives
+# different bytes. That is why the specification is at 2.0.0 — the 0.8.3 rows
+# keep their own version and their own digests.
 
 [dependencies]
 poulpy-ckks = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }

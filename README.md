@@ -1,6 +1,6 @@
 # CKKS bootstrapping, S2C-first — reference implementation
 
-A submission to `ckks-bootstrapping/s2c@1.0.0` on FHERMA: one call to Poulpy's S2C-first CKKS bootstrapping (`SlotsToCoeffs → ModUp → CoeffsToSlots → EvalMod`) on one ciphertext, timed. Poulpy 0.8.3, toolchain
+A submission to `ckks-bootstrapping/s2c@2.0.0` on FHERMA: one call to Poulpy's S2C-first CKKS bootstrapping (`SlotsToCoeffs → ModUp → CoeffsToSlots → EvalMod`) on one ciphertext, timed. Poulpy 0.9.0, toolchain
 `nightly-2026-05-14`.
 
 This repository is the reference implementation: the answer every

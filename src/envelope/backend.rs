@@ -2,12 +2,13 @@
 //!
 //! Every backend here is an exact NTT backend: the same seeds produce the same
 //! output bytes on each of them, so the digest of the reference (built with
-//! `ref`) is the expected answer for all of them — only the time differs.
+//! `ifma-rayon`, as `Cargo.toml` defaults) is the expected answer for all of
+//! them — only the time differs.
 //! Poulpy's approximate FFT64 backends run the preset at a different radix and
 //! would not reproduce the bytes; they are deliberately not offered.
 
 #[cfg(feature = "ref")]
-pub type BE = poulpy_cpu_ref::NTT4x30Ref;
+pub type BE = poulpy_cpu_portable::NTT4x30Portable;
 #[cfg(feature = "ref")]
 pub const NAME: &str = "ntt4x30_ref";
 

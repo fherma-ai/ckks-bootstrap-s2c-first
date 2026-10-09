@@ -7,7 +7,7 @@
 //! on any machine and any exact backend. The specification's file, laid over
 //! every submission; the same keygen as the bootstrapping's.
 //!
-//! Same calls as Poulpy 0.8.3's own preset driver
+//! Same calls as Poulpy 0.9.0's own preset driver
 //! (`poulpy_ckks::test_suite::presets::BootstrappingPresetRun`, the code behind
 //! https://www.poulpy.dev/benchmarks/), with seeds in place of constants.
 
@@ -64,7 +64,7 @@ pub fn preset_for(point: &Point) -> Result<BootstrappingPreset, String> {
 }
 
 /// The Poulpy release the harness is written against (pinned in Cargo.toml).
-pub const POULPY_VERSION: &str = "0.8.3";
+pub const POULPY_VERSION: &str = "0.9.0";
 
 /// The context: everything the envelope makes from the point, and what the
 /// author's `init` is handed. Public material — the module, the compiled
