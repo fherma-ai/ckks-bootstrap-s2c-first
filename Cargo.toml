@@ -43,7 +43,7 @@ rayon = { version = "1", optional = true }
 # single-threaded. Build another backend with
 #   cargo build --release --no-default-features --features <backend>
 # and, for the SIMD ones, RUSTFLAGS="-C target-cpu=native".
-default = ["ifma-rayon"]
+default = ["cuda"]
 ref = []
 # Internal: pulled in by every `*-rayon` backend.
 threaded = ["dep:rayon"]
