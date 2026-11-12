@@ -9,36 +9,38 @@ name = "fherma-solution"
 path = "src/main.rs"
 
 # Reference implementation for the CKKS bootstrapping benchmark: Poulpy's
-# S2C-first pipeline at preset n16_d35_k720_p19_s2c, the configuration
-# published at https://www.poulpy.dev/benchmarks/. It is the wrapper: keygen
-# and the input ciphertext are derived from seeds and are not measured; only
-# the ckks_bootstrap call is timed. See README.md.
+# S2C-first pipeline at preset n16_d35_k685_p19_s2c_ffr_ci, with the keys of
+# power-of-two rotations — the configuration Poulpy's own bootstrapping
+# benchmark names `n16_d35_k685_p19_s2c_ffr_ci+pow2`. It is the wrapper:
+# keygen and the input ciphertext are derived from seeds and are not
+# measured; only the bootstrap call is timed. See README.md.
 #
-# Targets Poulpy 0.9.0, which redesigned the HAL and changed the seeded noise
-# streams: the envelope does not compile against 0.8.3, and the same seed gives
-# different bytes. That is why the specification is at 2.0.0 — the 0.8.3 rows
-# keep their own version and their own digests.
+# Targets Poulpy 0.10.0, which adds the GPU backends and retires the k720
+# preset of 2.0.0: the specification is at 3.0.0, and the 0.9.0 rows keep
+# their own version and their own digests.
 
 [dependencies]
-poulpy-ckks = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
-poulpy-core = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
-poulpy-hal = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0" }
-poulpy-cpu-portable = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-ckks"] }
+poulpy-ckks = { version = "=0.10.0", features = ["test-utils"] }
+poulpy-core = "=0.10.0"
+poulpy-hal = "=0.10.0"
+poulpy-cpu-portable = { version = "=0.10.0", features = ["enable-ckks"] }
 sha2 = "0.10"
 libc = "0.2" # peak RSS via getrusage, for the report
+anyhow = "1"
 
-# The fast backends Poulpy publishes numbers for; one is chosen by a feature.
-poulpy-cpu-arm = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-neon", "enable-ckks"], optional = true }
-poulpy-cpu-avx = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-avx", "enable-ckks"], optional = true }
-poulpy-cpu-avx512 = { git = "https://github.com/poulpy-fhe/poulpy", tag = "v0.9.0", features = ["enable-avx512f", "enable-ckks"], optional = true }
+# The fast backends; one is chosen by a feature.
+poulpy-cpu-arm = { version = "=0.10.0", features = ["enable-neon", "enable-ckks"], optional = true }
+poulpy-cpu-avx = { version = "=0.10.0", features = ["enable-avx", "enable-ckks"], optional = true }
+poulpy-cpu-avx512 = { version = "=0.10.0", features = ["enable-avx512f", "enable-ckks"], optional = true }
+poulpy-gpu-portable = { version = "=0.10.0", features = ["enable-ckks"], optional = true }
 rayon = { version = "1", optional = true }
 
 [features]
-# Exactly one backend feature. The reference is the fastest one Poulpy has,
-# `ifma-rayon` (AVX-512 IFMA on every core), which is what the platform's
-# machines run; `ref` is the portable baseline. The `*-rayon` backends run
-# the bootstrap on `threads` worker threads; all others are single-threaded.
-# Build another backend with
+# Exactly one backend feature. The reference is `ifma-rayon` (AVX-512 IFMA on
+# every core); `ref` is the portable baseline; `cuda` is an NVIDIA GPU, with
+# the keys made on the host and prepared on the card. The `*-rayon` backends
+# run the bootstrap on `threads` worker threads; the CPU ones without it are
+# single-threaded. Build another backend with
 #   cargo build --release --no-default-features --features <backend>
 # and, for the SIMD ones, RUSTFLAGS="-C target-cpu=native".
 default = ["ifma-rayon"]
@@ -53,6 +55,8 @@ avx512 = ["dep:poulpy-cpu-avx512"]
 avx512-rayon = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-rayon", "threaded"]
 ifma = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-ifma"]
 ifma-rayon = ["dep:poulpy-cpu-avx512", "poulpy-cpu-avx512/enable-ifma", "poulpy-cpu-avx512/enable-rayon", "threaded"]
+cuda = ["dep:poulpy-gpu-portable", "poulpy-gpu-portable/enable-cuda"]
+wgpu = ["dep:poulpy-gpu-portable", "poulpy-gpu-portable/enable-metal"]
 
 [profile.release]
 opt-level = 3

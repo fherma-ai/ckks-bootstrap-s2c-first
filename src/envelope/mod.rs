@@ -19,7 +19,7 @@ pub mod keys;
 use crate::fherma::{Inputs, Point};
 
 pub use case::Case;
-pub use keys::{Context, Ct};
+pub use keys::{Context, Ct, HostCt};
 
 /// Discarded runs before the first timed one.
 pub const WARMUP: usize = 3;
@@ -28,8 +28,11 @@ pub const WARMUP: usize = 3;
 /// beside it for `check`.
 pub type Input = Case;
 
-/// What `run` leaves: the bootstrapped ciphertext — the signature's `ct`.
-pub type Output = Ct;
+/// What `run` leaves: the bootstrapped ciphertext — the signature's `ct` —
+/// on the host. A backend on a device brings it back inside `run`, so the
+/// time of `run` is the time until the result exists in memory the caller
+/// can read, whatever the device still had queued.
+pub type Output = HostCt;
 
 /// What `check` says of an output.
 pub struct Check {
@@ -74,6 +77,7 @@ pub fn describe(context: &Context) -> Vec<(&'static str, String)> {
         ("preset", context.preset.name().to_string()),
         ("poulpy", keys::POULPY_VERSION.to_string()),
         ("backend", backend::NAME.to_string()),
+        ("base2k", context.preset.base2k().to_string()),
     ]
 }
 
@@ -97,8 +101,8 @@ pub fn check(context: &Context, input: &Input, output: &Output) -> Check {
     let shaped = output.n() == input.ct.n()
         && output.rank() == input.ct.rank()
         && output.base2k() == input.ct.base2k()
-        && output.slots() == input.ct.slots()
-        && output.log_sparsity() == input.ct.log_sparsity()
+        && output.meta().slots == input.ct.meta().slots
+        && output.meta().log_sparsity == input.ct.meta().log_sparsity
         && output.log_delta() == input.ct.log_delta()
         && output.k().as_usize() >= context.preset.output_k();
     let precision = check::precision(context, output, &input.re, &input.im);

@@ -1,10 +1,12 @@
 # CKKS bootstrapping, S2C-first — reference implementation
 
-A submission to `ckks-bootstrapping/s2c@2.0.0` on FHERMA: one call to Poulpy's S2C-first CKKS bootstrapping (`SlotsToCoeffs → ModUp → CoeffsToSlots → EvalMod`) on one ciphertext, timed. Poulpy 0.9.0, toolchain
-`nightly-2026-05-14`.
+A submission to `ckks-bootstrapping/s2c@3.0.0` on FHERMA: one call to Poulpy's S2C-first CKKS bootstrapping (`SlotsToCoeffs → ModUp → CoeffsToSlots → EvalMod`) on one ciphertext, timed. Poulpy 0.10.0, toolchain
+`nightly-2026-05-14`. On a CPU or an NVIDIA GPU.
 
 This repository is the reference implementation: the answer every
 submission is compared to, and the harness every submission is measured in.
+Earlier versions of the specification are at earlier commits: `s2c@2.0.0`
+(Poulpy 0.9.0, preset `n16_d35_k720_p19_s2c`) at `d5be7ac`.
 
 ## Attribution
 
@@ -20,10 +22,23 @@ affiliated with the Poulpy project.
 
 | | |
 |---|---|
-| Input | the message (`N/2` points on the unit disc from `case_seed`) encoded and encrypted at the preset's input layout: 160 bits, scale 2³⁵ |
-| Operation | `ckks_bootstrap` on the preset `n16_d35_k720_p19_s2c`: SlotsToCoeffs, ModUp under sparse-secret encapsulation, CoeffsToSlots, EvalMod |
-| Output | one ciphertext at 720 bits, scale 2³⁵, the same message with 19+ bits of precision |
-| Measured on the platform | about 3.5 s (Intel Xeon 6776P, 24 cores, AVX-512 IFMA + Rayon). The four stages are specifications of their own — `slots-to-coeffs`, `mod-up`, `coeffs-to-slots`, `eval-mod` — on the same keys and inputs |
+| Preset | `n16_d35_k685_p19_s2c_ffr_ci` with the keys of power-of-two rotations, at base2k 52 — what Poulpy's own benchmark names `n16_d35_k685_p19_s2c_ffr_ci+pow2` |
+| Input | the message (`N/2` points on the unit disc from `case_seed`) encoded and encrypted at the preset's input layout, scale 2³⁵ |
+| Operation | `ckks_bootstrap_ci_into`: SlotsToCoeffs, ModUp under sparse-secret encapsulation with the first CoeffsToSlots factor on the raise, CoeffsToSlots, EvalMod on the conjugate-invariant ring |
+| Output | one ciphertext at 685 bits, scale 2³⁵, the same message with 19+ bits of precision, in host memory |
+
+## Two roles
+
+The keys and the inputs are made by a client, `NTT4x30Portable` on the host,
+the same on every backend; the backend under test compiles the context,
+receives the keys and prepares them, and bootstraps. The preset is taken at
+the radix of the NTT4x30 arithmetic on every backend. So the keys, the
+inputs and the expected bytes do not depend on the backend a submission
+picks: a CPU and a GPU answer are compared to the same digests.
+
+`run` returns the output on the host. On a GPU that is a copy back from the
+device, inside the timed call, so the time is the time until the result
+exists — not the time to queue the work.
 
 ## What to change to make it faster
 
@@ -32,10 +47,10 @@ over your repository at every measurement, so a change to it is not measured.
 
 | File | Role |
 |---|---|
-| `src/run.rs` | the bootstrap into the output buffer. **The only thing timed.** Replace its body with your own algorithm; the output must be the same bytes. |
-| `src/init.rs` | your setup over the point and the keys — buffers, plans, keys onto a GPU. Never sees a case. Not timed. |
+| `src/run.rs` | the bootstrap, and the output brought to the host. **The only thing timed.** Replace its body with your own algorithm; the output must be the same bytes. |
+| `src/init.rs` | your setup over the point and the keys — buffers, arenas, a recorded GPU graph. Never sees a case. Not timed. |
 | `src/free.rs` | your teardown. Not timed. |
-| `Cargo.toml` | the Poulpy backend, one cargo feature: `ref`, `avx`, `avx512`, `ifma`, `neon`, each with a `-rayon` variant. The reference builds `ifma-rayon`. |
+| `Cargo.toml` | the Poulpy backend, one cargo feature: `ref`, `avx`, `avx512`, `ifma`, `neon`, each with a `-rayon` variant; `cuda` for an NVIDIA GPU; `wgpu` for Metal on a Mac. The reference builds `ifma-rayon`. |
 | `config.jsonc` | `threads` for a `-rayon` backend; `0` is every core. |
 
 `src/envelope/` (key generation from the seed, the case from its seed, the
@@ -48,14 +63,16 @@ tolerance. Precision is reported beside the time, not judged.
 
 ```sh
 cargo build --release                                                  # the platform's image: x86-64, AVX-512 IFMA
+cargo build --release --no-default-features --features cuda            # an NVIDIA GPU, CUDA toolkit on the machine
 cargo build --release --no-default-features --features neon-rayon      # on an Apple M-series
-./target/release/fherma-solution make point --point '{"N":65536,"log_delta":35,"output_k":720,"key_seed":0}' --seeds 1,2
+cargo build --release --no-default-features --features wgpu            # the GPU of an Apple M-series, through Metal
+./target/release/fherma-solution make point --point '{"N":65536,"log_delta":35,"output_k":685,"key_seed":0}' --seeds 1,2
 ./target/release/fherma-solution point && cat point/out/results.json
 ```
 
-The keys alone are about 18 GB: plan for 32 GB and one process at a time. A digest made on another backend or operating system will not equal
-the platform's; the platform judges on its own machines.
+On an M-series Mac with 36 GB the NEON build peaks at 10.8 GB and the Metal
+one at 6.0 GB, so one process at a time is enough.
 
-To submit: `fherma implementation init ckks-bootstrapping/s2c@1.0.0` writes this
+To submit: `fherma implementation init ckks-bootstrapping/s2c@3.0.0` writes this
 layout for you; push your repository and register the commit on the
 platform. See the [documentation](https://www.fherma.io/docs/solution-kinds).

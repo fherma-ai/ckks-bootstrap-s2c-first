@@ -4,20 +4,22 @@
 //! the digest is over these bytes — the layout header and exactly the limbs
 //! that carry the ciphertext's `k` bits, column by column, little-endian i64 —
 //! so it does not depend on how big the buffer was allocated or what an
-//! earlier computation left beyond `k`. Poulpy's exact NTT backends produce
-//! the same limbs for the same seeds, so the reference's digest is the
+//! earlier computation left beyond `k`. The bytes are read on the host, from
+//! the ciphertext `run` returned there. Poulpy's exact NTT backends produce
+//! the same limbs for the same seeds at the same radix — the GPU's NTT4x30
+//! bit-identical to `NTT4x30Portable` — so the reference's digest is the
 //! expected answer for all of them. The digest itself is the loop's.
 
 use poulpy_ckks::CKKSInfos;
 use poulpy_core::layouts::{GLWEInfos, LWEInfos};
 use poulpy_hal::layouts::ZnxView;
 
-use super::keys::Ct;
+use super::keys::HostCt;
 
 const MAGIC: &[u8] = b"fherma/ckks-ct/v1";
 
 /// The bytes of `ct` the digest is over — what `out/NNNNNN/<result>.bin` holds.
-pub fn bytes(ct: &Ct) -> Vec<u8> {
+pub fn bytes(ct: &HostCt) -> Vec<u8> {
     let n = ct.n().as_usize();
     let cols = ct.rank().as_usize() + 1;
     let size = ct.size(); // limbs holding the current `k` bits
@@ -49,9 +51,10 @@ pub fn bytes(ct: &Ct) -> Vec<u8> {
     out
 }
 
-fn slots_tag(ct: &Ct) -> u64 {
-    match ct.slots() {
+fn slots_tag(ct: &HostCt) -> u64 {
+    match ct.meta().slots {
         poulpy_ckks::SlotsKind::Complex => 0,
         poulpy_ckks::SlotsKind::Real => 1,
+        poulpy_ckks::SlotsKind::Integer => 2,
     }
 }

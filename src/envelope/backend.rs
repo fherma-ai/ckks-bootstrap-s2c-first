@@ -1,9 +1,12 @@
-//! The backend under test, chosen at build time by a cargo feature.
+//! The backend under test, chosen at build time by a cargo feature, and the
+//! client beside it.
 //!
-//! Every backend here is an exact NTT backend: the same seeds produce the same
-//! output bytes on each of them, so the digest of the reference (built with
-//! `ifma-rayon`, as `Cargo.toml` defaults) is the expected answer for all of
-//! them — only the time differs.
+//! Every backend here is an exact NTT backend: at one radix the same seeds
+//! produce the same output bytes on each of them, so the digest of the
+//! reference (built with `ifma-rayon`, as `Cargo.toml` defaults) is the
+//! expected answer for all of them — only the time differs. The GPU backends
+//! run the NTT4x30 arithmetic of the CPU ones, bit-identical to
+//! `NTT4x30Portable` (poulpy-gpu-portable's README).
 //! Poulpy's approximate FFT64 backends run the preset at a different radix and
 //! would not reproduce the bytes; they are deliberately not offered.
 
@@ -52,6 +55,22 @@ pub type BE = poulpy_cpu_avx512::NTT3x42IfmaRayon;
 #[cfg(feature = "ifma-rayon")]
 pub const NAME: &str = "ntt3x42_ifma_rayon";
 
+#[cfg(feature = "cuda")]
+pub type BE = poulpy_gpu_portable::NTT4x30Cuda;
+#[cfg(feature = "cuda")]
+pub const NAME: &str = "ntt4x30_cuda";
+
+// Metal, Vulkan or WebGPU through wgpu: for trying a GPU submission on a
+// laptop. The platform's GPU machines are NVIDIA, and run `cuda`.
+#[cfg(feature = "wgpu")]
+pub type BE = poulpy_gpu_portable::NTT4x30Wgpu;
+#[cfg(feature = "wgpu")]
+pub const NAME: &str = "ntt4x30_wgpu";
+
+/// The client: secret, keys, encryption and decryption, on the host. The
+/// same on every backend, so that the keys and the inputs are too.
+pub type Client = poulpy_cpu_portable::NTT4x30Portable;
+
 #[cfg(not(any(
     feature = "ref",
     feature = "neon",
@@ -62,8 +81,10 @@ pub const NAME: &str = "ntt3x42_ifma_rayon";
     feature = "avx512-rayon",
     feature = "ifma",
     feature = "ifma-rayon",
+    feature = "cuda",
+    feature = "wgpu",
 )))]
-compile_error!("select one backend feature: ref (default), neon[-rayon], avx[-rayon], avx512[-rayon], ifma[-rayon]");
+compile_error!("select one backend feature: ref, neon[-rayon], avx[-rayon], avx512[-rayon], ifma[-rayon] (default), cuda, wgpu");
 
 // Every backend offered must be exact: an approximate FFT64 backend would run
 // the preset at another radix and could not reproduce the bytes. 0.8.3 let the

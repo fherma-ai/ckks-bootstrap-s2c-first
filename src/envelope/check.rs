@@ -5,17 +5,17 @@
 //! a bootstrapping is judged by: how many bits of the message survive. The
 //! same measurement as Poulpy's own preset driver
 //! (`test_suite::presets::BootstrappingPresetRun::precision`): decrypt the
-//! output at a small budget above `log_delta`, decode to `(re, im)`, and take
-//! `-log2` of the absolute error — the worst slot and the average. The
-//! specification's file; it has the secret because `setup` does.
+//! output on the client at a small budget above `log_delta`, decode to
+//! `(re, im)`, and take `-log2` of the absolute error — the worst slot and
+//! the average. The specification's file; it has the secret because `setup` does.
 
 use poulpy_ckks::api::{CKKSDecryptOps, CKKSEncodingHostOps};
-use poulpy_ckks::layouts::CKKSModuleAlloc;
-use poulpy_ckks::{CKKSInfos, CKKSMeta, SetCKKSInfos, SlotsKind};
+use poulpy_ckks::layouts::CKKSPlaintextAlloc;
+use poulpy_ckks::{CKKSInfos, GLWEPlaintextMeta, Scale, SetCKKSInfos, SlotsKind};
 use poulpy_core::layouts::LWEInfos;
 use poulpy_hal::api::ScratchOwnedBorrow;
 
-use super::keys::{Context, Ct};
+use super::keys::{Context, HostCt};
 
 /// Plaintext budget bits above `log_delta` the output is decrypted at, as in
 /// Poulpy's driver.
@@ -34,32 +34,29 @@ pub struct Precision {
 
 /// Decrypts the output and measures it against the message the case was
 /// made from.
-pub fn precision(state: &Context, output: &Ct, want_re: &[f64], want_im: &[f64]) -> Precision {
+pub fn precision(state: &Context, output: &HostCt, want_re: &[f64], want_im: &[f64]) -> Precision {
     let log_delta = output.log_delta();
     let log_budget = output
         .log_budget()
         .min(LOG_BUDGET)
         .min(127usize.saturating_sub(log_delta));
+    let client = &state.client;
 
-    let mut pt = state
-        .module
-        .ckks_pt_vec_alloc(output.base2k(), (log_delta + log_budget).into());
-    pt.set_meta(CKKSMeta {
-        log_sparsity: 0,
-        log_delta,
+    let mut pt = client.ckks_plaintext_alloc_from_slots(state.preset.n() / 2, output.base2k(), (log_delta + log_budget).into());
+    pt.set_meta(GLWEPlaintextMeta {
+        scale: Scale::Log(log_delta),
         slots: SlotsKind::Complex,
+        log_sparsity: 0,
     });
-    let mut arena = state.scratch.borrow_mut();
-    state
-        .module
+    let mut arena = state.client_scratch.borrow_mut();
+    client
         .ckks_decrypt(&mut pt, output, &state.sk, &mut arena.borrow())
         .expect("decrypt the output for the precision check");
 
     let m = want_re.len();
     let (mut got_re, mut got_im) = (vec![0.0f64; m], vec![0.0f64; m]);
-    state
-        .module
-        .ckks_decode_reim_into(&pt, &mut got_re, &mut got_im, &mut arena.borrow())
+    client
+        .ckks_decode_slots_host_into(&pt, &mut got_re, &mut got_im, &mut arena.borrow())
         .expect("decode the output for the precision check");
 
     let re = stats(&got_re, want_re, log_delta);

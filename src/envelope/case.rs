@@ -2,13 +2,15 @@
 //!
 //! The bundle's `generate`, inside the solution because it needs the secret:
 //! the message and its encryption mask and error are all derived from the
-//! case's seed, so a case is its seed. The specification's file, laid over
-//! every submission.
+//! case's seed, so a case is its seed. The client encrypts it on the host and
+//! the ciphertext is moved to the backend under test. The specification's
+//! file, laid over every submission.
 
 use poulpy_ckks::api::{CKKSEncodingHostOps, CKKSEncryptOps};
-use poulpy_ckks::layouts::CKKSModuleAlloc;
-use poulpy_ckks::{CKKSInfos, SetCKKSInfos};
-use poulpy_core::layouts::LWEInfos;
+use poulpy_ckks::layouts::{CKKSCiphertextAlloc, CKKSPlaintextAlloc};
+use poulpy_ckks::{CKKSInfos, GLWEPlaintextMeta, SetCKKSInfos, SlotsKind};
+use poulpy_core::layouts::{GLWE, LWEInfos};
+use poulpy_core::api::TransferInto;
 use poulpy_hal::api::ScratchOwnedBorrow;
 use poulpy_hal::source::Source;
 
@@ -16,8 +18,9 @@ use crate::fherma::Inputs;
 
 use super::keys::{seed32, Context, Ct};
 
-/// One test case: the input ciphertext, and the message it encrypts — kept
-/// beside it so the output can be measured against it (`check`).
+/// One test case: the input ciphertext on the backend under test, and the
+/// message it encrypts — kept beside it so the output can be measured
+/// against it (`check`).
 pub struct Case {
     pub ct: Ct,
     pub re: Vec<f64>,
@@ -29,34 +32,32 @@ pub struct Case {
 /// and error all come from the seed.
 pub fn generate(state: &Context, input: &Inputs) -> Case {
     let seed = input.case_seed;
-    let (re, im) = sample_unit_disc(seed, state.preset.n() / 2);
+    let preset = &state.preset;
+    let (re, im) = sample_unit_disc(seed, preset.n() / 2);
+    let client = &state.client;
+    let layout = state.input_layout;
 
-    let mut pt = state
-        .module
-        .ckks_pt_vec_alloc(state.preset.base2k().into(), state.input_layout.k());
-    pt.set_meta(state.input_layout.meta());
-    let mut arena = state.scratch.borrow_mut();
-    state
-        .module
-        .ckks_encode_reim_into(&mut pt, &re, &im, &mut arena.borrow())
+    let mut pt = client.ckks_plaintext_alloc_from_slots(preset.n() / 2, preset.base2k().into(), layout.k());
+    pt.set_meta(GLWEPlaintextMeta {
+        slots: SlotsKind::Complex,
+        ..layout.meta
+    });
+    let mut arena = state.client_scratch.borrow_mut();
+    client
+        .ckks_encode_slots_host_into(&mut pt, &re, &im, &mut arena.borrow())
         .expect("encode the case message");
 
-    // 0.9.0 samples the mask and the Gaussian noise at the ciphertext's own
-    // width, so the encryption layout is no longer the caller's to pass.
-    let mut ct = state.module.ckks_ciphertext_alloc_from_glwe_infos(&state.input_layout);
+    let mut host = client.ckks_ciphertext_alloc_from_glwe_infos(&layout);
     let mut xa = Source::new(seed32(seed, "input-xa"));
     let mut xe = Source::new(seed32(seed, "input-xe"));
-    state
-        .module
-        .ckks_encrypt_sk(
-            &mut ct,
-            &pt,
-            &state.sk,
-            &mut xe,
-            &mut xa,
-            &mut arena.borrow(),
-        )
+    client
+        .ckks_encrypt_sk(&mut host, &pt, &state.sk, &mut xe, &mut xa, &mut arena.borrow())
         .expect("encrypt the case input");
+
+    let mut ct = state.module.ckks_ciphertext_alloc_from_glwe_infos(&layout);
+    let glwe: &GLWE<_, _> = &host;
+    glwe.transfer_into(&mut *ct);
+    ct.set_meta(host.meta());
     Case { ct, re, im }
 }
 

@@ -1,4 +1,4 @@
-// GENERATED for bootstrap/s2c@1.0.0. Do not edit — `--update` rewrites it.
+// GENERATED for bootstrap/s2c@3.0.0. Do not edit — `--update` rewrites it.
 //
 // The loop around the envelope and the author's three functions:
 //
