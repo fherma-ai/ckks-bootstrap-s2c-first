@@ -167,15 +167,40 @@ pub fn init<'a>(point: &Point, context: &'a Context, config: &str) -> State<'a> 
         bootstrap_k: preset.bootstrap_k().into(),
     }));
 
+    // On a GPU: one bootstrap first, as Poulpy's own replay test does, so the
+    // kernels are compiled and the arenas touched before anything is recorded;
+    // then the recording, and what it holds, on stderr for the run's log.
+    #[cfg(any(feature = "cuda", feature = "wgpu"))]
+    let replay = {
+        bootstrap(device);
+        device.module.synchronize();
+        let replay = poulpy_gpu_portable::Replay::<backend::Runtime>::record(move || bootstrap(device));
+        report("recorded", &replay);
+        replay
+    };
+
     State {
         context,
         device,
         host: context.client.ckks_ciphertext_alloc_from_glwe_infos(&bootstrap_layout),
-        // Recording runs the bootstrap (on whatever the input buffer holds)
-        // and keeps its launches; every replay redoes them on these buffers.
+        // Every replay redoes the recorded launches on these buffers.
         #[cfg(any(feature = "cuda", feature = "wgpu"))]
-        replay: poulpy_gpu_portable::Replay::<backend::Runtime>::record(move || bootstrap(device)),
+        replay,
     }
+}
+
+/// What a recording is, on stderr: whether replays run it as one graph, how
+/// many kernels it launches, the device memory it keeps, and what it did
+/// besides launching kernels — none of which a graph can hold.
+#[cfg(any(feature = "cuda", feature = "wgpu"))]
+pub fn report(when: &str, replay: &poulpy_gpu_portable::Replay<'static, backend::Runtime>) {
+    eprintln!(
+        "fherma replay {when}: graph={} launches={} retained_bytes={} host_events={:?}",
+        replay.is_graph(),
+        replay.launches(),
+        replay.retained_bytes(),
+        replay.host_events()
+    );
 }
 
 /// One bootstrap of the device's input into its output, queued: on a GPU it
