@@ -241,6 +241,20 @@ impl State<'_> {
         self.device.module.synchronize();
     }
 
+    /// After every case, beside it in the report: what the recording replayed
+    /// is — whether as one graph, how many kernels, the device memory it holds,
+    /// the allocations it made. The loop calls it where it exists; on a CPU
+    /// build it does not, and the case reports none.
+    #[cfg(any(feature = "cuda", feature = "wgpu"))]
+    pub fn fherma_metrics(&self) -> Vec<(&'static str, f64)> {
+        vec![
+            ("replay_graph", if self.replay.is_graph() { 1.0 } else { 0.0 }),
+            ("replay_launches", self.replay.launches() as f64),
+            ("replay_retained_mb", self.replay.retained_bytes() as f64 / 1e6),
+            ("replay_allocations", self.replay.host_events().allocations as f64),
+        ]
+    }
+
     /// Device to host: the bootstrap's output, at the width it was left at.
     /// Clocked by the loop on its own, not the score.
     pub fn fherma_d2h(&mut self) -> &Output {
