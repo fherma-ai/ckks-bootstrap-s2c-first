@@ -13,20 +13,21 @@ spec = "ckks-bootstrapping/s2c@3.0.0"
 lang  = "rust"
 build = "cargo build --release"
 run   = "./target/release/fherma-solution"
-# The envelope: setup / generate / serialize / check, and the backend choice.
+# The envelope: setup / generate / serialize / check, all on the host.
 pinned = [
   "src/envelope/mod.rs",
   "src/envelope/keys.rs",
   "src/envelope/case.rs",
   "src/envelope/bytes.rs",
   "src/envelope/check.rs",
-  "src/envelope/backend.rs",
 ]
-# The author's: the three functions, the build, the config.
+# The author's: the three functions and the transfers, the backend, the build,
+# the config.
 authored = [
   "src/init.rs",
   "src/run.rs",
   "src/free.rs",
+  "src/backend.rs",
   "Cargo.toml",
   "config.jsonc",
   "rust-toolchain.toml",

@@ -2,27 +2,26 @@
 //!
 //! The bundle's `generate`, inside the solution because it needs the secret:
 //! the message and its encryption mask and error are all derived from the
-//! case's seed, so a case is its seed. The client encrypts it on the host and
-//! the ciphertext is moved to the backend under test. The specification's
-//! file, laid over every submission.
+//! case's seed, so a case is its seed. The client encrypts it on the host,
+//! and the case stays there: a submission moves it to its backend itself.
+//! The specification's file, laid over every submission.
 
 use poulpy_ckks::api::{CKKSEncodingHostOps, CKKSEncryptOps};
 use poulpy_ckks::layouts::{CKKSCiphertextAlloc, CKKSPlaintextAlloc};
-use poulpy_ckks::{CKKSInfos, GLWEPlaintextMeta, SetCKKSInfos, SlotsKind};
-use poulpy_core::layouts::{GLWE, LWEInfos};
-use poulpy_core::api::TransferInto;
+use poulpy_ckks::{GLWEPlaintextMeta, SetCKKSInfos, SlotsKind};
+use poulpy_core::layouts::LWEInfos;
 use poulpy_hal::api::ScratchOwnedBorrow;
 use poulpy_hal::source::Source;
 
 use crate::fherma::Inputs;
 
-use super::keys::{seed32, Context, Ct};
+use super::keys::{seed32, Context, HostCt};
 
-/// One test case: the input ciphertext on the backend under test, and the
-/// message it encrypts — kept beside it so the output can be measured
-/// against it (`check`).
+/// One test case: the input ciphertext on the host, and the message it
+/// encrypts — kept beside it so the output can be measured against it
+/// (`check`).
 pub struct Case {
-    pub ct: Ct,
+    pub ct: HostCt,
     pub re: Vec<f64>,
     pub im: Vec<f64>,
 }
@@ -54,11 +53,7 @@ pub fn generate(state: &Context, input: &Inputs) -> Case {
         .ckks_encrypt_sk(&mut host, &pt, &state.sk, &mut xe, &mut xa, &mut arena.borrow())
         .expect("encrypt the case input");
 
-    let mut ct = state.module.ckks_ciphertext_alloc_from_glwe_infos(&layout);
-    let glwe: &GLWE<_, _> = &host;
-    glwe.transfer_into(&mut *ct);
-    ct.set_meta(host.meta());
-    Case { ct, re, im }
+    Case { ct: host, re, im }
 }
 
 /// `m` complex values uniform on the unit disc, from the case-seed: SplitMix64
