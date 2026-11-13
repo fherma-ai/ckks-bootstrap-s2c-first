@@ -1,5 +1,6 @@
-//! The backend under test, chosen at build time by a cargo feature, and the
-//! client beside it.
+//! The backend the bootstrap runs on, chosen at build time by a cargo
+//! feature. The submission's file: the specification's client stays
+//! `NTT4x30Portable` on the host whatever is chosen here.
 //!
 //! Every backend here is an exact NTT backend: at one radix the same seeds
 //! produce the same output bytes on each of them, so the digest of the
@@ -9,6 +10,7 @@
 //! `NTT4x30Portable` (poulpy-gpu-portable's README).
 //! Poulpy's approximate FFT64 backends run the preset at a different radix and
 //! would not reproduce the bytes; they are deliberately not offered.
+#![allow(dead_code)] // `NAME` is for a submission that reports its backend
 
 #[cfg(feature = "ref")]
 pub type BE = poulpy_cpu_portable::NTT4x30Portable;
@@ -67,9 +69,12 @@ pub type BE = poulpy_gpu_portable::NTT4x30Wgpu;
 #[cfg(feature = "wgpu")]
 pub const NAME: &str = "ntt4x30_wgpu";
 
-/// The client: secret, keys, encryption and decryption, on the host. The
-/// same on every backend, so that the keys and the inputs are too.
-pub type Client = poulpy_cpu_portable::NTT4x30Portable;
+/// The GPU runtime a bootstrap is recorded on and replayed, as one graph
+/// where the runtime has graphs (`poulpy_gpu_portable::Replay`).
+#[cfg(feature = "cuda")]
+pub type Runtime = poulpy_gpu_portable::Cuda;
+#[cfg(feature = "wgpu")]
+pub type Runtime = poulpy_gpu_portable::Wgpu;
 
 #[cfg(not(any(
     feature = "ref",
@@ -105,4 +110,23 @@ pub fn set_threads(threads: usize) {
         .expect("rayon global pool is built once, before any work");
     #[cfg(not(feature = "threaded"))]
     let _ = threads;
+}
+
+/// `threads` from `config.jsonc`; 0 or absent is every core.
+pub fn threads(config: &str) -> usize {
+    let all = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let text: String = config
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.find("\"threads\"")
+        .and_then(|at| text[at..].find(':').map(|colon| at + colon + 1))
+        .and_then(|from| {
+            let rest = text[from..].trim_start();
+            let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+            rest[..end].parse::<usize>().ok()
+        })
+        .filter(|&t| t > 0)
+        .unwrap_or(all)
 }

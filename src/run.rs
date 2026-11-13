@@ -3,53 +3,28 @@
 //!
 //! Reference: Poulpy's `ckks_bootstrap_ci_into` on the preset's compiled
 //! context and keys (S2C-first: SlotsToCoeffs → ModUp → CoeffsToSlots →
-//! EvalMod on the conjugate-invariant ring), then the result moved to the
-//! host. On a CPU backend the move is a copy; on a GPU it waits for the
-//! device, so the time is the bootstrap's and not the time to queue it.
+//! EvalMod on the conjugate-invariant ring), from the device's input buffer
+//! into its output buffer — where `fherma_h2d` put the case, and where
+//! `fherma_d2h` reads the result (both in `init.rs`). On a GPU backend it is
+//! the replay of the bootstrap `init` recorded. It returns once the backend
+//! has finished, so the time is the bootstrap's and not the time to queue it.
 //!
-//! A submission with its own algorithm replaces the body of `run`. It gets
-//! its state from `init` and the input ciphertext, and must leave the same
-//! bytes in the host output as this reference does.
+//! A submission with its own algorithm replaces the body of `run`. It must
+//! leave the same bytes in the output as this reference does.
 
-use poulpy_ckks::api::CKKSBootstrappingCIOps;
-use poulpy_ckks::{CKKSInfos, SetCKKSInfos};
-use poulpy_core::api::TransferInto;
-use poulpy_core::layouts::{GLWE, LWEInfos, SetK};
-use poulpy_hal::api::ScratchOwnedBorrow;
+use poulpy_hal::api::ModuleSynchronize;
 
 use crate::envelope::{Input, Output};
 use crate::init::State;
 
 pub fn run<'a>(state: &'a mut State<'_>, input: &Input) -> &'a Output {
-    let context = state.context;
-    let State {
-        device,
-        output,
-        scratch,
-        scratch_ci,
-        ..
-    } = state;
-
-    // The bootstrap consumes width: it starts at the preset's bootstrap width
-    // and leaves the output at `output_k`. The buffer is reused, so it is set
-    // back to the full width before every run.
-    device.set_k(context.preset.bootstrap_k().into());
-    context
-        .module
-        .ckks_bootstrap_ci_into(
-            &context.ci,
-            device,
-            &input.ct,
-            &context.context,
-            &context.keys,
-            &mut scratch.borrow(),
-            &mut scratch_ci.borrow(),
-        )
-        .expect("bootstrap");
-
-    output.set_k(device.k());
-    let glwe: &GLWE<_, _> = device;
-    glwe.transfer_into(&mut **output);
-    output.set_meta(device.meta());
-    output
+    // The case is already on the device: fherma_h2d put it there.
+    let _ = input;
+    #[cfg(any(feature = "cuda", feature = "wgpu"))]
+    state.replay.replay();
+    #[cfg(not(any(feature = "cuda", feature = "wgpu")))]
+    crate::init::bootstrap(state.device);
+    state.device.module.synchronize();
+    // The loop reads the output from fherma_d2h, which brings it to the host.
+    &state.host
 }

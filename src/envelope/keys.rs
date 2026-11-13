@@ -1,27 +1,27 @@
 //! SETUP — the context from the point. NOT measured.
 //!
 //! `setup(point)` does keygen once per benchmark point: picks the Poulpy
-//! preset the point names, then the modules, the compiled bootstrapping
-//! context, the secret and the bootstrapping keys — from the point's
-//! `key_seed`. The specification's file, laid over every submission.
+//! preset the point names, then the secret and the bootstrapping keys — from
+//! the point's `key_seed`. The specification's file, laid over every
+//! submission.
 //!
-//! Two roles, as in Poulpy 0.10.0's own preset driver
+//! Everything here is on the host, on the client: `NTT4x30Portable`, as in
+//! Poulpy 0.10.0's own preset driver
 //! (`poulpy_ckks::test_suite::presets::BootstrappingPresetRun::setup_ci`, the
-//! code behind its benchmarks), with seeds in place of constants:
+//! code behind its benchmarks), with seeds in place of constants. It samples
+//! the secret, generates the keys, encrypts every case and decrypts every
+//! output. Where the bootstrap runs — which backend, which device — is the
+//! submission's: its `init` takes the keys from here, moves them to its
+//! backend and prepares them there.
 //!
-//! - the client, `NTT4x30Portable` on the host, samples the secret, generates
-//!   the keys, encrypts every case and decrypts every output;
-//! - the backend under test (`backend::BE`, a CPU backend or a GPU) compiles
-//!   the context, receives the keys and prepares them, and bootstraps.
-//!
-//! The client is the same on every backend, and the preset is taken at the
-//! radix of the NTT4x30 arithmetic on every backend, so the keys, the inputs
-//! and the expected bytes are the same whichever backend a submission picks.
+//! The preset is taken at the radix of the NTT4x30 arithmetic, which every
+//! exact backend runs, so the keys, the inputs and the expected bytes are the
+//! same whichever backend a submission picks.
 
 use sha2::{Digest, Sha256};
 
 use poulpy_ckks::api::{CKKSAllOpsTmpBytes, CKKSBootstrappingCIOps};
-use poulpy_ckks::layouts::{BootstrappingContextPrepared, BootstrappingKeysPrepared, BootstrappingPipeline};
+use poulpy_ckks::layouts::{BootstrappingKeySet, BootstrappingPipeline, EvalModRing};
 use poulpy_ckks::presets::bootstrapping::{all, BootstrappingPreset};
 use poulpy_ckks::{CKKSLayout, GLWEPlaintextMeta, Scale, SlotsKind};
 
@@ -34,19 +34,21 @@ use poulpy_hal::source::Source;
 
 use std::cell::RefCell;
 
-use crate::envelope::backend::{Client, BE};
 use crate::fherma::Point;
+
+/// The client: secret, keys, encryption and decryption, on the host.
+pub type Client = poulpy_cpu_portable::NTT4x30Portable;
 
 /// The conjugate-invariant twin of a backend: EvalMod runs on it.
 pub type CI<B> = <Module<B> as CKKSBootstrappingCIOps<B>>::CI;
 
-/// A ciphertext on the backend under test: what `run` receives.
-pub type Ct = poulpy_ckks::layouts::CKKSCiphertextOwned<BE>;
-
-/// A ciphertext on the host, on the client: what `run` returns. A backend on
-/// a device moves its output here inside `run`, so the time `run` takes
-/// includes all the work the bootstrap queued.
+/// A ciphertext on the host, on the client: what the case is, and what the
+/// output must be.
 pub type HostCt = poulpy_ckks::layouts::CKKSCiphertextOwned<Client>;
+
+/// The bootstrapping keys on the host, unprepared: what a submission moves to
+/// its backend and prepares there (`transfer_and_prepare_ci`).
+pub type HostKeys = BootstrappingKeySet<<Client as Backend>::OwnedBuf, <Client as Backend>::ZnxWord>;
 
 /// The specification: the circuit. Everything else — sizes, widths, key
 /// layout, hamming weights — comes with the preset the point selects.
@@ -100,24 +102,14 @@ fn at_radix<B: MaxBase2k, BCI: MaxBase2k>(preset: &BootstrappingPreset) -> anyho
 pub const POULPY_VERSION: &str = "0.10.0";
 
 /// The context: everything the envelope makes from the point, and what the
-/// author's `init` is handed. Public material — the modules, the compiled
-/// bootstrapping context, the prepared keys, the scratch sizes — and, for the
-/// envelope's own use, the client, its secret and its arena.
+/// author's `init` is handed. Public material — the preset and the keys, on
+/// the host — and, for the envelope's own use, the client, its secret and its
+/// arena.
 pub struct Context {
     pub preset: BootstrappingPreset,
-    /// The backend under test, at degree `2N`: one module serves the ring
-    /// conversions and the stages of degree `N`.
-    pub module: Module<BE>,
-    /// Its conjugate-invariant twin, at degree `N`, for EvalMod.
-    pub ci: Module<CI<BE>>,
-    pub context: BootstrappingContextPrepared<BE, f64>,
-    pub keys: BootstrappingKeysPrepared<<BE as Backend>::OwnedBuf, BE, CI<BE>>,
-    /// The working memory one bootstrap needs on each ring, as Poulpy's
-    /// `ckks_bootstrap_ci_tmp_bytes` states it: what the author's `init`
-    /// sizes its arenas by.
-    pub scratch_bytes: usize,
-    pub scratch_ci_bytes: usize,
-    /// The host side: keygen, encryption, decryption.
+    /// The bootstrapping keys, on the client and unprepared.
+    pub keys: HostKeys,
+    /// The host side: keygen, encryption, decryption, at degree `2N`.
     pub client: Module<Client>,
     pub(crate) client_scratch: RefCell<ScratchOwned<Client>>,
     /// The secret `generate` encrypts with. Derivable from the point's
@@ -132,8 +124,10 @@ impl Context {
         let preset = preset_for(point).unwrap_or_else(|e| panic!("{e}"));
         let key_seed = point.key_seed;
         let n = preset.n() as u64;
-        let (module, ci) = (Module::<BE>::new(2 * n), Module::<CI<BE>>::new(n));
-        let (client, client_ci) = (Module::<Client>::new(2 * n), Module::<CI<Client>>::new(n));
+        // A preset with EvalMod on the conjugate-invariant ring keeps one
+        // module of degree 2N for the conversions; the others work at N.
+        let ci_ring = conjugate_invariant(&preset);
+        let client = Module::<Client>::new(if ci_ring { 2 * n } else { n });
         let keys_layout = preset.keys_layout();
         let input_layout = preset.input_layout();
         let bootstrap_layout = preset.bootstrap_layout();
@@ -150,13 +144,14 @@ impl Context {
         client.glwe_secret_prepare(&mut sk, &sk_raw);
 
         // The keys, on the client.
-        let (bytes, bytes_ci) = keys_layout.generate_ci_tmp_bytes(&client, &client_ci);
+        let mut client_scratch = ScratchOwned::<Client>::alloc(client_tmp_bytes(&client, &preset));
         let mut source_xs = Source::new(seed32(key_seed, "xs"));
         let mut source_xa = Source::new(seed32(key_seed, "xa"));
         let mut source_xe = Source::new(seed32(key_seed, "xe"));
-        let keys = preset
-            .plan()
-            .generate_keys_ci(
+        let keys = if ci_ring {
+            let client_ci = Module::<CI<Client>>::new(n);
+            let (bytes, bytes_ci) = keys_layout.generate_ci_tmp_bytes(&client, &client_ci);
+            preset.plan().generate_keys_ci(
                 &client,
                 &client_ci,
                 &sk_raw,
@@ -167,58 +162,35 @@ impl Context {
                 &mut ScratchOwned::<Client>::alloc(bytes).borrow(),
                 &mut ScratchOwned::<CI<Client>>::alloc(bytes_ci).borrow(),
             )
-            .expect("generate the bootstrapping keys");
-
-        // The context, on the backend under test.
-        let plan = preset.plan();
-        let (bytes, bytes_ci) =
-            BootstrappingContextPrepared::<BE, f64>::compile_ci_unprepared_tmp_bytes(&module, &ci, plan)
-                .expect("size the compile");
-        let unprepared = BootstrappingContextPrepared::<BE, f64>::compile_ci_unprepared(
-            &module,
-            &ci,
-            preset.base2k().into(),
-            plan,
-            &mut ScratchOwned::<BE>::alloc(bytes).borrow(),
-            &mut ScratchOwned::<CI<BE>>::alloc(bytes_ci).borrow(),
-        )
-        .expect("compile the preset's bootstrapping plan");
-        let bytes = unprepared.prepare_tmp_bytes(&module);
-        let context = unprepared
-            .prepare(&module, &mut ScratchOwned::<BE>::alloc(bytes).borrow())
-            .expect("prepare the bootstrapping context");
-
-        // The keys, moved to the backend under test and prepared there; the
-        // client's copies are dropped with `keys` at the end of this scope.
-        let (bytes, bytes_ci) = keys_layout.prepare_ci_tmp_bytes(&module, &ci);
-        let prepared = keys
-            .transfer_and_prepare_ci(
-                &module,
-                &ci,
-                &mut ScratchOwned::<BE>::alloc(bytes).borrow(),
-                &mut ScratchOwned::<CI<BE>>::alloc(bytes_ci).borrow(),
+        } else {
+            preset.plan().generate_keys(
+                &client,
+                &sk_raw,
+                keys_layout,
+                &mut source_xs,
+                &mut source_xe,
+                &mut source_xa,
+                &mut client_scratch.borrow(),
             )
-            .expect("prepare the bootstrapping keys");
-        drop(keys);
-
-        let (scratch_bytes, scratch_ci_bytes) =
-            module.ckks_bootstrap_ci_tmp_bytes(&ci, &bootstrap_layout, &input_layout, &context, keys_layout);
-        let client_scratch = ScratchOwned::<Client>::alloc(client_tmp_bytes(&client, &preset));
+        }
+        .expect("generate the bootstrapping keys");
 
         Context {
             preset,
-            module,
-            ci,
-            context,
-            keys: prepared,
-            scratch_bytes,
-            scratch_ci_bytes,
+            keys,
             client,
             client_scratch: RefCell::new(client_scratch),
             sk,
             input_layout,
         }
     }
+}
+
+/// Whether the preset runs EvalMod on the conjugate-invariant ring of degree
+/// N, which takes a module of degree 2N and its CI twin (`*_ci` calls), or on
+/// the standard ring at N.
+pub fn conjugate_invariant(preset: &BootstrappingPreset) -> bool {
+    preset.plan().eval_mod_ring() != EvalModRing::Standard
 }
 
 /// The client's arena: encoding, encryption, decryption and decoding at the

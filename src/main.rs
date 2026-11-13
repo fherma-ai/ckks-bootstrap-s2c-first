@@ -8,7 +8,8 @@
 // what each stage cost. Every stage is timed — `setup` (the envelope's keys),
 // `init` (the author's), `generate` (the case from its inputs), the warm-up,
 // `run`, `serialize`, writing, `check` — and only the call to `run::run` is
-// the score; the rest is reported beside it.
+// the score; the rest is reported beside it. So are `fherma_h2d` and
+// `fherma_d2h`, where the answer has them.
 //
 // The point directory:
 //
@@ -45,6 +46,56 @@ use sha2::{Digest, Sha256};
 use fherma::{Inputs, Point, Tensor};
 
 type Anyhow<T> = Result<T, Box<dyn std::error::Error>>;
+
+/// `fherma_h2d` and `fherma_d2h` are an optional pair of `pub` methods of the
+/// author's `State`, for an answer that keeps its data on a device:
+///
+///     impl State<'_> {
+///         pub fn fherma_h2d(&mut self, input: &envelope::Input) { … }   // host to device
+///         pub fn fherma_d2h(&mut self) -> &envelope::Output { … }       // device to host
+///     }
+///
+/// Rust takes a type's own method over a trait's, so the answer's are called
+/// where it has them, and these stand-ins where it does not: they do nothing
+/// and say so, and the loop neither clocks nor reports a transfer that did
+/// not happen.
+#[allow(dead_code)]
+struct Absent;
+
+#[allow(dead_code)]
+trait Device {
+    fn fherma_h2d(&mut self, _input: &envelope::Input) -> Absent {
+        Absent
+    }
+    fn fherma_d2h(&mut self) -> Absent {
+        Absent
+    }
+}
+impl<T> Device for T {}
+
+/// Whether the transfer to the device was the answer's own.
+trait Done {
+    fn done(self) -> bool;
+}
+impl Done for () {
+    fn done(self) -> bool { true }
+}
+impl Done for Absent {
+    fn done(self) -> bool { false }
+}
+
+/// The output on the host, as `fherma_d2h` returned it.
+trait Landed<'s> {
+    fn landed(self) -> &'s envelope::Output;
+}
+impl<'s> Landed<'s> for &'s envelope::Output {
+    fn landed(self) -> &'s envelope::Output { self }
+}
+impl<'s> Landed<'s> for Absent {
+    fn landed(self) -> &'s envelope::Output {
+        panic!("State has fherma_h2d and no fherma_d2h: the output stays where run left it")
+    }
+}
 
 /// The results the signature declares, in its order. `serialize` must return
 /// exactly these, by name.
@@ -128,16 +179,39 @@ fn solve(root: &Path) -> Anyhow<()> {
         if !warmed {
             let mark = Instant::now();
             for _ in 0..envelope::WARMUP {
-                run::run(&mut state, &input);
+                if state.fherma_h2d(&input).done() {
+                    run::run(&mut state, &input);
+                    state.fherma_d2h().landed();
+                } else {
+                    run::run(&mut state, &input);
+                }
             }
             warmup_s = mark.elapsed().as_secs_f64();
             warmed = true;
         }
 
+        // H2D: the input to where run reads it, where the answer has it. Timed apart.
+        let mark = Instant::now();
+        let device = state.fherma_h2d(&input).done();
+        let h2d_s = mark.elapsed().as_secs_f64();
+
         // RUN: monotonic, and around the call and nothing else. The score.
+        // D2H, where the answer has it: the output back on the host. Timed apart.
         let started = Instant::now();
-        let output = run::run(&mut state, &input);
-        let seconds = started.elapsed().as_secs_f64();
+        let output: &envelope::Output;
+        let seconds;
+        let mut moved = String::new();
+        if device {
+            run::run(&mut state, &input);
+            seconds = started.elapsed().as_secs_f64();
+            let mark = Instant::now();
+            output = state.fherma_d2h().landed();
+            let d2h_s = mark.elapsed().as_secs_f64();
+            moved = format!(",\"h2d_s\":{h2d_s:.9},\"d2h_s\":{d2h_s:.9}");
+        } else {
+            output = run::run(&mut state, &input);
+            seconds = started.elapsed().as_secs_f64();
+        }
 
         // SERIALIZE: the output as the envelope's canonical bytes, and the digest.
         let mark = Instant::now();
@@ -183,7 +257,7 @@ fn solve(root: &Path) -> Anyhow<()> {
         rows.push(format!(
             concat!(
                 "{{\"i\":{i},\"seconds\":{seconds:.9},\"status\":\"ok\",\"valid\":{valid},",
-                "\"generate_s\":{generate_s:.9},\"digest_s\":{digest_s:.9},\"write_s\":{write_s:.9},\"check_s\":{check_s:.9},",
+                "\"generate_s\":{generate_s:.9},\"digest_s\":{digest_s:.9},\"write_s\":{write_s:.9},\"check_s\":{check_s:.9}{moved},",
                 "\"digest\":\"{sha}\",\"metrics\":{{{metrics}}}{note}}}"
             ),
             i = i,
@@ -193,6 +267,7 @@ fn solve(root: &Path) -> Anyhow<()> {
             digest_s = digest_s,
             write_s = write_s,
             check_s = check_s,
+            moved = moved,
             sha = sha,
             metrics = metrics.join(","),
             note = note,
