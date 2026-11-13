@@ -53,6 +53,7 @@ type Anyhow<T> = Result<T, Box<dyn std::error::Error>>;
 ///     impl State<'_> {
 ///         pub fn fherma_h2d(&mut self, input: &envelope::Input) { … }   // host to device
 ///         pub fn fherma_d2h(&mut self) -> &envelope::Output { … }       // device to host
+///         pub fn fherma_metrics(&self) -> Vec<(&'static str, f64)> { … } // optional: reported per case
 ///     }
 ///
 /// Rust takes a type's own method over a trait's, so the answer's are called
@@ -70,8 +71,22 @@ trait Device {
     fn fherma_d2h(&mut self) -> Absent {
         Absent
     }
+    fn fherma_metrics(&self) -> Absent {
+        Absent
+    }
 }
 impl<T> Device for T {}
+
+/// What `fherma_metrics` returned: the answer's own numbers, or none.
+trait Reported {
+    fn reported(self) -> Option<Vec<(&'static str, f64)>>;
+}
+impl Reported for Vec<(&'static str, f64)> {
+    fn reported(self) -> Option<Vec<(&'static str, f64)>> { Some(self) }
+}
+impl Reported for Absent {
+    fn reported(self) -> Option<Vec<(&'static str, f64)>> { None }
+}
 
 /// Whether the transfer to the device was the answer's own.
 trait Done {
@@ -244,10 +259,14 @@ fn solve(root: &Path) -> Anyhow<()> {
         let check = envelope::check(&context, &input, output);
         let check_s = mark.elapsed().as_secs_f64();
 
-        let metrics: Vec<String> = check
-            .metrics
+        // The answer's own numbers first, where it has fherma_metrics, then the
+        // envelope's: a name both use is the envelope's.
+        let theirs: Vec<(&'static str, f64)> = state.fherma_metrics().reported().unwrap_or_default();
+        let metrics: Vec<String> = theirs
             .iter()
-            .map(|(key, value)| format!("\"{key}\":{}", json_number(*value)))
+            .filter(|(key, _)| !check.metrics.iter().any(|(own, _)| own == key))
+            .chain(check.metrics.iter())
+            .map(|(key, value)| format!("\"{}\":{}", clean(key), json_number(*value)))
             .collect();
         let note = check
             .note
